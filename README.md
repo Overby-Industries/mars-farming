@@ -90,8 +90,8 @@ Tune them by playing.
 ## Roadmap
 
 Crew food demand and a reason to grow one crop over another, dust on the solar panels and on the dome, equipment
-faults and events, a better storm model, crops chosen for Mars, a save file, sound, tuning, and a licence.
+faults and events, a better storm model, crops chosen for Mars, a save file, sound and tuning.
 
 ## License
 
-Not chosen yet.
+[Apache 2.0](LICENSE), like the other software repositories of Overby Industries. It covers the code and the graphics and models the code generates. It does not license the project's name (section 6 of the licence). Built on the Godot Engine and godot-cpp, both MIT-licensed.
