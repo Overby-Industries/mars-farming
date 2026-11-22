@@ -1,0 +1,33 @@
+# Godot
+.godot/
+godot/.godot/
+*.translation
+/android/
+
+
+# GDExtension / SCons build artifacts
+*.exe
+*.x86_64
+*.a
+*.o
+*.os
+*.obj
+*.so
+*.dll
+*.lib
+*.exp
+*.pdb
+.sconsign.dblite
+
+# IDE / OS
+.vscode/
+.idea/
+.claude/
+*.swp
+*.tmp
+*.TMP
+Thumbs.db
+.DS_Store
+
+# Screenshots written by tests/shot.gd
+/shots/
