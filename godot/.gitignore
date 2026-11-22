@@ -31,3 +31,6 @@ Thumbs.db
 
 # Screenshots written by tests/shot.gd
 /shots/
+
+# The exported game (deploy_to_itch.ps1)
+/builds/
