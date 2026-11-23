@@ -14,6 +14,10 @@ config/name="Mars Farming"
 run/main_scene="res://scenes/dome.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
 
+[audio]
+
+general/text_to_speech=true
+
 [display]
 
 window/size/viewport_width=1600

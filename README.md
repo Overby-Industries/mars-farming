@@ -7,10 +7,11 @@ code-generated graphics style as [Aevoria Simulator](https://github.com/Overby-I
 its sibling [Aevoria Space Station Farming](https://github.com/Overby-Industries/aevoria-space-station-farming).
 
 **Status: an early start.** One dome, four crops (potato is the staple), a growth model with tests, procedural
-plants, Blender-modelled props, dust storms, and a playable dome scene. Not a finished game. See
-[docs/DESIGN.md](docs/DESIGN.md) for what exists and what does not.
+plants, Blender-modelled props, dust storms, a playable dome scene with a floating button over every crop, a crew astronaut
+built from modular suit components who talks you through the farm, and a short training for new players. Not a finished game.
+See [docs/DESIGN.md](docs/DESIGN.md) for what exists and what does not.
 
-![The dome at noon, with potatoes, lettuce, radishes and tomatoes growing](docs/dome.jpg)
+![The dome at noon: a floating button over every slot says Harvest, Water, Clear or how far the plant has grown, and the crew astronaut on the walkway describes the plant that is selected](docs/dome.jpg)
 
 ## What is here
 
@@ -18,14 +19,68 @@ plants, Blender-modelled props, dust storms, and a playable dome scene. Not a fi
 |---|---|
 | `core/` | The farm simulation in plain C++17, header-only, no Godot types: `species.hpp` (the crops), `plant.hpp` (growth, stress, harvest), `bay.hpp` (beds, lights, sun, dust, water, nutrients, clock) |
 | `src/` | The GDExtension: `FarmBay` (the simulation as a node), `FarmShapeBuilder` (recipe to 3D shape), `FarmSkinGenerator` (recipe to texture), plus the mesh and plant geometry code |
-| `godot/` | The Godot project: `scenes/dome.tscn` (the game slice), `scenes/showcase.tscn` (every crop at every stage), `scripts/`, `models/` (the Blender props as `.glb`), `tests/` |
-| `blender/` | `build_assets.py`: builds the props in `godot/models/` from code |
+| `godot/` | The Godot project: `scenes/dome.tscn` (the game slice), `scenes/training.tscn` (the training for new players), `scenes/showcase.tscn` (every crop at every stage), `scripts/` (including `slot_buttons.gd`, the floating buttons over the slots, `crew_voice.gd`, the crew member's voice, `training.gd`, the coach, and `astronaut.gd`, which assembles the crew member), `models/` (the Blender props as `.glb`, and the astronaut's eleven suit components in `models/astronaut/`), `tests/` |
+| `blender/` | `build_assets.py` builds the props in `godot/models/` from code; `build_astronaut.py` builds the suit's components in `godot/models/astronaut/` |
 | `tests/` | The C++ test suite for `core/` (CMake) |
 | `docs/` | [DESIGN.md](docs/DESIGN.md) and [GRAPHICS_GUIDE.md](docs/GRAPHICS_GUIDE.md) |
 
 **The core is shared with the station game.** `core/`, `tests/` and most of `src/` started as a copy of the same
 code in [aevoria-space-station-farming](https://github.com/Overby-Industries/aevoria-space-station-farming).
 There is no shared library yet, so a fix made in one repository has to be carried to the other by hand.
+
+## The crew astronaut
+
+![The crew astronaut from the front, the back and three quarters](docs/astronaut.jpg)
+
+A chunky EVA suit, 1.8 m tall: glossy white armour over a matte woven-fabric undersuit with corrugated joints, orange
+accents, small blue light strips, a dark visor and a green leaf on the chest and on the backpack. It stands on the walkway
+in front of the near bench and looks over the beds at the dome and the plain beyond; its helmet turns slowly and its chest
+breathes. It has no collision and you do not steer it, but it is the crew's voice (see *Playing*): its head turns to look at
+whatever it is talking about. (Its orange happens to be Mars's rust, too.)
+
+It is built as **separate modular components**: helmet, torso, backpack, an arm, a glove, a leg and a boot for each
+side, each its own `.glb` with its origin at its joint, hung on named sockets by `godot/scripts/astronaut.gd`. Any part can
+be swapped, recoloured or left out (`recipe` in that script), and the same files are used by
+[Aevoria Space Station Farming](https://github.com/Overby-Industries/aevoria-space-station-farming). See
+[docs/GRAPHICS_GUIDE.md](docs/GRAPHICS_GUIDE.md).
+
+## Playing
+
+Every crop slot has a **floating button** over it that says what its plant needs next, and does it when you press it
+(pressing also selects the slot, so the right-hand panel shows its details):
+
+| Button | The plant or slot |
+|---|---|
+| **+** | the slot is empty: sow the chosen crop |
+| **42%** | all is well: how far the plant has grown |
+| **Water**, **Feed** | its bed has run low on water or on nutrients |
+| **Harvest** | it is ready (or overripe) |
+| **Clear** | it has died |
+
+You can also click a slot or a plant to select it and use the buttons in the right-hand panel (sow the slot or the whole
+bed, water, feed, harvest, clear). Right-drag orbits the camera and the wheel zooms; the buttons along the bottom set the
+speed of time. The sliders set the shade screens and the LED brightness; "Call a dust storm" starts a storm to see what it does. The LED bars hang more than a metre above the soil, over the top of even a full-grown tomato, so every slot can
+be seen and picked; from a steep or sideways view a bar that would stand in front of a slot fades to a ghost.
+
+**The crew voice.** The astronaut says what needs to happen next (a crop is ready, a bed is dry or short of nutrients, the
+water is low, slots are waiting for seeds), describes whatever you select (the crop, its stage and health, and the moisture
+and nutrients of the regolith), and reports news as it happens (a crop sprouts, a harvest, a plant lost). In a dust storm it warns about the sun and the solar power. *Ask crew*
+(or the **C** key) gives the most useful thing to do right now. Every line is captioned on screen, and the astronaut turns its head to
+the plant it is talking about. The speech is the operating system's text-to-speech through Godot, so it uses the voices the PC
+already has and ships none (it needs `audio/general/text_to_speech` on in `project.godot`, which it is); the *Crew voice* box
+switches the speech off and leaves the captions. With no voices installed, and in headless runs, there are only captions.
+
+## Training for new players
+
+![The training: the coach panel over the real game, with a ring on the Water button of the bed that has run dry](docs/training.jpg)
+
+The **How to play** button at the bottom of the game opens `scenes/training.tscn`: the real game with a coach on top. A panel says
+what to do, a ring marks the control to use, and the crew reads each step aloud. There are six lessons, the same journey
+that `godot/tests/crew_ui_test.gd` drives through the game: **sow** (a slot, then a whole bed), **grow** (run the clock), **dry** (a bed
+runs low: press Water), **harvest** (a crop is ripe: press Harvest), **select** (click a plant and hear it described) and **ask**
+(press Ask crew). *Show me* does the step with a pointer on the real buttons, *Skip 5 days* helps the impatient, and *Watch it all*
+plays the whole training by itself. It takes about two minutes, and ends with *Start a new game* or *Keep this farm* (carry on in the
+farm you grew).
 
 ## Build and run (Windows)
 
@@ -39,11 +94,6 @@ python -m SCons platform=windows target=template_debug -j4
 The first build compiles godot-cpp and takes a while (tens of minutes); after that, a change under `src/` or
 `core/` rebuilds in seconds. It writes `godot/bin/libmarsfarm.windows.template_debug.x86_64.dll`. Open the `godot/`
 folder in Godot 4.6.3 and run it (the main scene is the dome). Build `template_release` as well before exporting.
-
-**Controls:** left-click a slot in a bed to select it; right-drag orbits the camera; the wheel zooms. Sow the slot
-or the whole bed, water and feed the bed, harvest when a plant says Ready. The sliders set the shade screens and the
-LED brightness; "Call a dust storm" starts a storm to see what it does. The buttons along the bottom set the speed
-of time.
 
 ## Tests
 
@@ -61,14 +111,22 @@ The Godot side, with the extension built (headless, so no window):
 godot --headless --path godot --import
 godot --headless --path godot -s res://tests/smoke.gd
 godot --headless --path godot -s res://tests/assets_test.gd
+godot --headless --path godot -s res://tests/astronaut_test.gd
 godot --headless --path godot -s res://tests/dome_test.gd
+godot --headless --path godot -s res://tests/crew_ui_test.gd
+godot --headless --path godot -s res://tests/training_test.gd
 ```
 
 On a fresh checkout the first `--import` can exit with a crash code (on Windows with Godot 4.6.3 it does, from
 inside Godot itself, after the import has finished); run it a second time and it exits cleanly.
 
 `godot/tests/shot.gd` captures a frame of any scene with the real renderer, and `shot_growth.gd` plays a short
-session (sow, grow some days, optionally a storm or a night) and captures that, for looking at the art.
+session (sow, grow some days, optionally a storm or a night) and captures that, for looking at the art; the picture at the
+top is `shot_growth.gd -- dome.jpg 45 noon default 11` (a name ending in `.jpg` is saved as a small JPEG into
+`godot/shots/`; the last number is the second of the astronaut's idle animation to freeze, and 11 s has its head turned toward
+the beds). `shot_astronaut.gd` photographs the suit on a bare stage (`shot_astronaut.gd -- astronaut.jpg 0 front,back,three_quarter`), and
+`shot_training.gd` photographs the training at one moment (the picture of the training is `shot_training.gd -- training.jpg dry`; the
+others are `welcome`, `sow`, `sow2`, `grow`, `harvest`, `select`, `ask`, `finish` and `watch`).
 
 ## Release to itch.io
 

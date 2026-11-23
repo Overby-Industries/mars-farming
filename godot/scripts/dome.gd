@@ -36,8 +36,29 @@ const MODEL_AIRLOCK := "res://models/airlock.glb"
 
 const REFRESH_SECONDS := 0.25
 
+# How high the LED bars hang above a bench top (the soil is 0.17 m higher still) and where their wires end. Low bars used to
+# cut across the far beds in the start view and poke into a full-grown tomato; at 1.55 m they clear the tallest crop (0.7 m)
+# by more than half a metre, and from the start view and the orbit views around it no bar hides a slot (dome_test.gd).
+const LIGHT_HEIGHT := 1.55
+const ROOM_TOP := 3.8
+
+# The crew astronaut (scripts/astronaut.gd puts it together from the modular components in models/astronaut/). It stands
+# on the walkway in front of the near bench, beside its left-hand end, looking over the beds at the dome and the plain beyond.
+const Astronaut = preload("res://scripts/astronaut.gd")
+const ASTRONAUT_POS := Vector3(-1.7, 0.0, 1.65)
+const ASTRONAUT_YAW_DEG := -12.0          # 0 faces down the dome, away from the airlock; negative turns toward the beds on its right
+
+const SlotButtons = preload("res://scripts/slot_buttons.gd")
+const CrewVoice = preload("res://scripts/crew_voice.gd")
+const TRAINING_SCENE := "res://scenes/training.tscn"      # the how-to-play training for new players (scripts/training.gd)
+
 var bay := FarmBay.new()
 var builder := FarmShapeBuilder.new()
+var slot_buttons: Control                  # the floating buttons over the slots (scripts/slot_buttons.gd)
+var voice: Node                            # the crew member's voice (scripts/crew_voice.gd)
+var hud_palette := {}                       # the HUD's accent, panel and text colours; the training scene dresses its coach panel to match
+var astronaut: Node3D
+var astronaut_recipe := {}                  # optional look of the crew member (scripts/astronaut.gd lists the keys); set before the scene enters the tree
 
 var selected := Vector2i(-1, -1)          # (bed, slot), or (-1, -1)
 var crop_key := "potato"
@@ -49,6 +70,7 @@ var _tray_recipe := {}
 var _slot_offsets: PackedVector3Array
 var _plants := {}
 var _plant_keys := {}
+var _bars: Array = []                      # [{node, box (world), meshes, fade, blocking}] per LED bar, see fade_blocking_lights()
 var _lights: Array = []
 var _ring: MeshInstance3D
 var _refresh := 0.0
@@ -65,9 +87,12 @@ var _lamp: OmniLight3D
 
 var _cam: Camera3D
 var _pivot: Node3D
-var _yaw := 0.3
-var _pitch := -0.62
-var _dist := 5.6
+# The start view: over the astronaut's shoulder at the benches, the dome and the Martian plain beyond. The pivot sits left
+# of the middle so the walkway is in the picture; every slot stays clear of the HUD panels (dome_test.gd checks).
+const START_PIVOT := Vector3(-0.4, 1.0, 0.5)
+var _yaw := 0.27
+var _pitch := -0.42
+var _dist := 5.7
 var _orbiting := false
 
 # HUD
@@ -116,10 +141,12 @@ func _ready() -> void:
 	bay.plant_died.connect(func(b, s): _say("A plant in bed %d died" % (b + 1)))
 	bay.day_changed.connect(_on_sol)
 
+	get_viewport().msaa_3d = Viewport.MSAA_4X       # the suit's plates and hoses have fine edges
 	_build_environment()
 	_build_surface()
 	_build_dome()
 	_build_beds()
+	_build_astronaut()
 	_build_camera()
 	_build_hud()
 	_apply_camera()
@@ -272,6 +299,7 @@ func _build_dome() -> void:
 	lock.position = Vector3(0, 0.0, DOME_R - 0.55)
 	lock.rotation_degrees.y = 180.0
 	add_child(lock)
+	lock.add_to_group("furniture")
 
 	# two benches the beds stand on
 	for z in [-0.95, 0.65]:
@@ -293,19 +321,31 @@ func _build_beds() -> void:
 		tray.name = "Bed%d" % bi
 		tray.position = origin
 		add_child(tray)
+		tray.add_to_group("furniture")
 
+		# an LED bar hung LIGHT_HEIGHT above the bench, well clear of the tallest crop and out of the way of the camera
 		var light: Node3D = builder.build_node({"shape": "grow_light", "model": MODEL_LIGHT, "albedo_color": Color("efe6da"), "accent_color": COL_RUST})
-		light.position = origin + Vector3(0, 0.82, 0)
+		light.name = "GrowLight%d" % bi
+		light.position = origin + Vector3(0, LIGHT_HEIGHT, 0)
 		add_child(light)
+		light.add_to_group("furniture")
+		var bar_meshes := _bar_meshes(light)
+		var bar_box := AABB()
+		for i in bar_meshes.size():
+			var mi := bar_meshes[i] as MeshInstance3D
+			var b := mi.global_transform * mi.mesh.get_aabb()
+			bar_box = b if i == 0 else bar_box.merge(b)
+		_bars.append({"node": light, "box": bar_box, "meshes": bar_meshes, "fade": 0.0, "blocking": false})
 		var omni := OmniLight3D.new()
 		omni.light_color = Color(1.0, 0.78, 0.9)
-		omni.omni_range = 1.5
-		omni.light_energy = 0.8
+		omni.omni_range = 2.8                       # far enough to reach the soil from that height
+		omni.light_energy = 1.0
 		omni.position = light.position + Vector3(0, -0.15, 0)
 		add_child(omni)
 		_lights.append({"led": _find_led(light), "omni": omni})
-		_box("Hanger", origin + Vector3(-0.4, 1.9, 0), Vector3(0.012, 2.2, 0.012), Color("9a9088"), 0.4, 0.8)
-		_box("Hanger", origin + Vector3(0.4, 1.9, 0), Vector3(0.012, 2.2, 0.012), Color("9a9088"), 0.4, 0.8)
+		var wire_from := light.position.y + 0.12    # wires from the bar's own hangers up into the dome's frame
+		for sx in [-0.4, 0.4]:
+			_box("Hanger", Vector3(origin.x + sx, (wire_from + ROOM_TOP) * 0.5, origin.z), Vector3(0.012, ROOM_TOP - wire_from, 0.012), Color("9a9088"), 0.4, 0.8)
 
 		for si in _slot_offsets.size():
 			var body := StaticBody3D.new()
@@ -322,11 +362,13 @@ func _build_beds() -> void:
 	var tank: Node3D = builder.build_node({"shape": "tank", "model": MODEL_TANK, "albedo_color": Color("efe6da"), "accent_color": COL_RUST})
 	tank.position = Vector3(-3.7, 0.0, -2.4)
 	add_child(tank)
+	tank.add_to_group("furniture")
 	for spec in [[Vector3(1.9, 0.0, 5.3), 8.0], [Vector3(1.9, 0.25, 5.3), -5.0], [Vector3(2.45, 0.0, 5.4), -12.0], [Vector3(-1.9, 0.0, 5.3), 15.0]]:
 		var crate: Node3D = builder.build_node({"shape": "box", "name": "SupplyCrate", "model": MODEL_CRATE, "size": Vector3(0.4, 0.25, 0.3)})
 		crate.position = spec[0]
 		crate.rotation_degrees.y = spec[1]
 		add_child(crate)
+		crate.add_to_group("furniture")
 
 	_ring = MeshInstance3D.new()
 	var torus := TorusMesh.new()
@@ -342,9 +384,17 @@ func _build_beds() -> void:
 	_ring.visible = false
 	add_child(_ring)
 
+func _build_astronaut() -> void:
+	astronaut = Astronaut.new()
+	astronaut.name = "Astronaut"
+	astronaut.recipe = astronaut_recipe
+	astronaut.position = ASTRONAUT_POS
+	astronaut.rotation_degrees.y = ASTRONAUT_YAW_DEG
+	add_child(astronaut)
+
 func _build_camera() -> void:
 	_pivot = Node3D.new()
-	_pivot.position = Vector3(0, 0.9, -0.15)
+	_pivot.position = START_PIVOT
 	add_child(_pivot)
 	_cam = Camera3D.new()
 	_cam.fov = 45.0
@@ -439,7 +489,8 @@ func _process(delta: float) -> void:
 		var level: float = bay.get_bed_info(i)["light_level"]
 		if led != null:
 			led.emission_energy_multiplier = (2.5 * (0.35 + 0.65 * level)) if on else 0.0
-		(_lights[i]["omni"] as OmniLight3D).light_energy = (1.2 * level) if on else 0.0
+		(_lights[i]["omni"] as OmniLight3D).light_energy = (1.7 * level) if on else 0.0
+	fade_blocking_lights(delta)
 
 # ---------------------------------------------------------------------------------------------------------
 # the HUD (the panel helpers below are shared with the station game)
@@ -466,6 +517,11 @@ func _build_hud() -> void:
 	theme.set_color("font_disabled_color", "Button", Color(0.55, 0.52, 0.5))
 	theme.set_color("font_color", "CheckBox", COL_CLOUD)
 	root.theme = theme
+
+	# floating buttons over the crop slots (Harvest, Water, Feed ...), added first so the panels below draw over them
+	slot_buttons = SlotButtons.new()
+	root.add_child(slot_buttons)
+	slot_buttons.setup(self, {"feed": COL_RUST, "quiet": Color(0.12, 0.07, 0.05, 0.66), "quiet_text": COL_CLOUD, "selected": Color("ffb070")})
 
 	var left := MarginContainer.new()
 	left.set_anchors_preset(Control.PRESET_TOP_LEFT)
@@ -545,6 +601,18 @@ func _build_hud() -> void:
 	for sp in SPEEDS:
 		var speed: float = sp[1]
 		_button(row, sp[0], func(): set_speed(speed))
+	row.add_child(VSeparator.new())
+	_button(row, "Ask crew (C)", func(): voice.ask())
+	var voice_check := CheckBox.new()
+	voice_check.text = "Crew voice"
+	voice_check.button_pressed = true
+	voice_check.toggled.connect(func(on): voice.set_audio(on))
+	row.add_child(voice_check)
+	var how_sep := VSeparator.new()
+	row.add_child(how_sep)
+	var how_btn := _button(row, "How to play", func(): get_tree().change_scene_to_file(TRAINING_SCENE))
+	how_sep.visible = not has_meta("training")        # the training scene hosts this farm and shows its own coach instead
+	how_btn.visible = not has_meta("training")
 
 	_toast = Label.new()
 	_toast.set_anchors_preset(Control.PRESET_CENTER_TOP)
@@ -556,6 +624,25 @@ func _build_hud() -> void:
 	_toast.modulate.a = 0.0
 	_toast.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(_toast)
+
+	# the crew member's voice: speech, captions along the bottom, and the astronaut turning to look at what it describes
+	voice = CrewVoice.new()
+	add_child(voice)
+	hud_palette = {"accent": COL_RUST, "panel": COL_PANEL, "text": COL_CLOUD}
+	voice.setup(self, astronaut, root, hud_palette)
+	voice.medium = "regolith"
+	voice.reservoir = "ice-melt reserve"
+	voice.intro = "Dome greenhouse online. Pick a slot and I will tell you about it, or press Ask crew for what to do next. New here? Press How to play."
+
+# What the crew voice may add to its usual advice (scripts/crew_voice.gd calls this): the dust and the solar power.
+func voice_notes() -> Array:
+	var s := bay.get_status()
+	var sun := roundi(100.0 * exp(-0.5 * maxf(0.0, tau - 0.5)))
+	if storm_active and tau > 1.5:
+		return [{"key": "storm", "text": "A dust storm is up. Sunlight is down to %d percent and the solar array gives %d percent of its power. Expect dim LEDs tonight, and do not count on the sun." % [sun, roundi(100.0 * s["power_budget_w"] / SOLAR_BUDGET_W)]}]
+	if s["lights_on"] and s["power_demand_w"] > s["power_budget_w"] * 1.001:
+		return [{"key": "power", "text": "The LEDs want more power than the array can give, so every bed is dimmed. Turn the LED brightness down to share it out."}]
+	return []
 
 func _refresh_hud() -> void:
 	if _status_label == null:
@@ -609,6 +696,8 @@ func _box(name: String, pos: Vector3, size: Vector3, color: Color, rough := 0.7,
 	var n: Node3D = builder.build_node({"shape": "box", "name": name, "size": size, "albedo_color": color, "roughness": rough, "metallic": metal})
 	n.position = pos
 	add_child(n)
+	if name in ["BenchTop", "BenchLeg", "BenchTrim", "Hanger"]:
+		n.add_to_group("furniture")
 	return n
 
 func _find_led(light: Node) -> StandardMaterial3D:
@@ -655,6 +744,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		_yaw -= mm.relative.x * 0.005
 		_pitch = clampf(_pitch - mm.relative.y * 0.005, -1.35, -0.1)
 		_apply_camera()
+	elif event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_C:
+		voice.ask()                 # "C" asks the crew what to do next, like the Ask crew button
 
 func _pick(screen_pos: Vector2) -> void:
 	var from := _cam.project_ray_origin(screen_pos)
@@ -740,6 +831,38 @@ func _on_stage_changed(bed: int, slot: int, stage: int) -> void:
 	if stage == FarmBay.STAGE_READY:
 		_say("%s in bed %d is ready" % [bay.get_plant(bed, slot)["name"], bed + 1])
 
+# An LED bar that stands between the camera and any slot fades to a ghost, so from any orbit angle every crop location can be
+# seen and picked (the bars hang high, but a steep or sideways view can still look through one). Returns how many bars are in
+# the way; `delta` is the time to fade by (the tests use a big one).
+func fade_blocking_lights(delta: float) -> int:
+	if _cam == null:
+		return 0
+	var eye := _cam.global_position
+	var blocking := 0
+	for bar in _bars:
+		var blocks := false
+		for bi in BED_CENTERS.size():
+			for si in _slot_offsets.size():
+				if (bar["box"] as AABB).intersects_segment(eye, BED_CENTERS[bi] + _slot_offsets[si] + Vector3(0, 0.12, 0)) != null:
+					blocks = true
+					break
+			if blocks:
+				break
+		bar["blocking"] = blocks
+		blocking += 1 if blocks else 0
+		bar["fade"] = move_toward(bar["fade"], 0.88 if blocks else 0.0, delta * 3.0)
+		for mi in bar["meshes"]:
+			(mi as GeometryInstance3D).transparency = bar["fade"]
+	return blocking
+
+func _bar_meshes(node: Node) -> Array:
+	var out: Array = []
+	if node is MeshInstance3D:
+		out.append(node)
+	for c in node.get_children():
+		out.append_array(_bar_meshes(c))
+	return out
+
 func _refresh_all() -> void:
 	for b in BED_CENTERS.size():
 		for s in BED_ROWS * BED_COLS:
@@ -774,6 +897,8 @@ func _say(text: String) -> void:
 	_toast.text = text
 	_toast_time = 3.5
 	_toast.modulate.a = 1.0
+	if voice != null:
+		voice.on_toast(text)
 
 func _panel(parent: Control) -> VBoxContainer:
 	var pc := PanelContainer.new()

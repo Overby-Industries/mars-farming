@@ -2,14 +2,15 @@ extends SceneTree
 # A scripted play session for the screenshot: sow the four beds with different crops, run some days with automatic
 # irrigation, pick a slot, and capture the frame (real renderer, off-screen). Used to eyeball the whole scene.
 #
-#   Godot --path godot --resolution 1600x900 --position -3000,-3000 -s res://tests/shot_growth.gd -- <name> [days] [noon|storm|night] [default|back|wide]
+#   Godot --path godot --resolution 1600x900 --position -3000,-3000 -s res://tests/shot_growth.gd -- <name> [days] [noon|storm|night] [default|back|wide] [idle_seconds]
 #
 # Saves godot/shots/<name>.png (that folder is git-ignored).
 #   noon  - 12:00 under a clear sky
 #   storm - 12:00 at the peak of a dust storm
 #   night - 21:00, the LEDs on
-# and the camera: the default view, `back` (turned round to face the airlock), `airlock` (close up on the airlock and
-# the supply crates), or `wide` (pulled back to take in the whole dome).
+# and the camera: the default view (over the astronaut's shoulder at the beds), `at:x,y,z:distance:yaw:pitch` (look at any
+# point), `back` (turned round to face the airlock), `airlock` (close up on the airlock and the supply crates), or `wide`
+# (pulled back to take in the whole dome). idle_seconds is where the astronaut's idle animation is frozen (default 3).
 
 func _initialize() -> void:
 	_run()
@@ -45,6 +46,7 @@ func _run() -> void:
 		_:
 			scene.advance_world(6.0)
 	scene._refresh_all()
+	scene.voice.set_audio(false)                 # captions only: a screenshot must not speak through the speakers
 	scene.select_slot(0, 2)
 	if view.begins_with("at:"):          # at:x,y,z:distance:yaw:pitch  - look at any point
 		var parts := view.substr(3).split(":")
@@ -72,6 +74,13 @@ func _run() -> void:
 			scene._pitch = -0.32
 			scene._dist = 15.0
 			scene._apply_camera()
+	scene._toast_time = 0.0                      # no toast in the picture
+	scene._toast.modulate.a = 0.0
+	if scene.astronaut != null:
+		scene.astronaut.look_at_point(scene.voice.slot_point(0, 2), 10.0, true)
+	if scene.astronaut != null:                  # freeze the astronaut's idle animation at a chosen moment (default 3 s)
+		scene.astronaut.set_process(false)
+		scene.astronaut.pose(float(args[4]) if args.size() > 4 else 3.0)
 	for i in 8:
 		await process_frame
 	await RenderingServer.frame_post_draw
