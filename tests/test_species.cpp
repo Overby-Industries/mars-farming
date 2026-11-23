@@ -23,6 +23,7 @@ void runSpeciesTests() {
         CHECK(s.ppfd_opt > 0.0 && s.ppfd_max > s.ppfd_opt);
         CHECK(s.temp_min < s.temp_opt_low && s.temp_opt_low < s.temp_opt_high && s.temp_opt_high < s.temp_max);
         CHECK(s.water_use > 0.0 && s.canopy_m2 > 0.0 && s.nutrient_use > 0.0 && s.yield_kg > 0.0);
+        CHECK(s.kcal_per_kg > 50.0 && s.kcal_per_kg < 1000.0);        // fresh vegetables: 100 to 800 kcal per kg
         CHECK(s.ready_window_days > 0.0);
 
         // flowering and fruiting thresholds: absent (1.0) for crops that never flower on screen,

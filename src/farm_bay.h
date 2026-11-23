@@ -18,6 +18,10 @@ namespace godot {
  * Time: `time_scale` is game hours per real second (1 = a day every 24 s). advance_hours() steps the
  * simulation directly, which is how tests drive it. Nothing advances in the editor.
  *
+ * The colony (core/colony.hpp): start_colony(difficulty, demand_scale, reserve_scale) begins feeding a crew from this bay's
+ * harvests; get_colony() reports its food, hunger, outcome and score; the colony_outcome signal says how it ended (OUTCOME_*).
+ * Without start_colony() the bay is a sandbox.
+ *
  * Settings (set_setting / get_setting), all numbers except auto_irrigate which is a bool:
  *   temp_c temp_swing_c light_on_hour light_off_hour led_w_per_bed led_umol_per_joule
  *   led_optical_efficiency power_budget_w sun_peak_ppfd dust_tau shade reclaim_fraction auto_irrigate
@@ -62,6 +66,11 @@ public:
 
     void set_setting(const String &key, const Variant &value);
     Variant get_setting(const String &key) const;
+
+    void start_colony(int difficulty, double demand_scale = 1.0, double reserve_scale = 1.0);
+    void stop_colony();
+    Dictionary get_colony() const;
+    static Dictionary get_difficulty_rules(int difficulty);
 
     void advance_hours(double hours);
     void set_time_scale(double hours_per_second);

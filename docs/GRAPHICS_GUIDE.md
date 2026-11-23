@@ -156,13 +156,18 @@ a `bay`, `BED_CENTERS`, `_slot_offsets`, `_cam`, `selected`, `select_slot()` and
 - `scripts/training.gd`: the coach panel on its own `CanvasLayer` above the HUD, a pulsing ring drawn round the control to use (a
   `StyleBoxFlat` border) or round a plant, and an arrow pointer for "Show me". It takes its colours from the game's `hud_palette`.
   `scripts/training_driver.gd` has the helpers for the parts about time, shared with the tests.
+- `scripts/colony_ui.gd`: the colony bar along the top (a `PanelContainer` in a centred `MarginContainer`) and three overlays that dim the game and take its
+  clicks: the difficulty and voice picker, the ending (the story, the score by its parts, a name for the leaderboard) and the leaderboard. It is added to the
+  HUD last so the overlays are above everything, takes its colours from `hud_palette`, and holds the clock while an overlay is open. `scripts/leaderboard.gd`
+  keeps the ten best runs per mode in `user://leaderboard.json`; `scripts/prefs.gd` keeps the crew voice's gender, the last mode and the player's name in
+  `user://prefs.cfg`. The tests point both at scratch files.
 
 The LED bars are named `GrowLight0` to `GrowLight3` and hang `LIGHT_HEIGHT` (1.55 m) above the bench. `fade_blocking_lights()` raises the
 `transparency` of any bar that stands between the camera and a slot, and lowers it again when the view moves on.
 
 Checks: `godot/tests/crew_ui_test.gd` (the buttons and the voice, the voice read as text), `godot/tests/training_test.gd` (the coach played
-through as a player and with "Watch it all"), `godot/tests/dome_test.gd` (bar height and fading, a clear start view), and
-`godot/tests/shot_training.gd` (the training at any moment, for looking at it).
+through as a player and with "Watch it all"), `godot/tests/dome_test.gd` (bar height and fading, a clear start view), `godot/tests/colony_ui_test.gd` (the picker, the bar, the endings, the score and the leaderboard, the male and the female voice), and
+`godot/tests/shot_training.gd` and `shot_colony.gd` (the training and the colony screens, for looking at them).
 
 ## `FarmSkinGenerator`
 

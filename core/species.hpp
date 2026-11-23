@@ -9,7 +9,7 @@
 // growth trials and should be tuned by playing, not trusted as agronomy.
 //
 // Units: light is PPFD in umol/m2/s at the canopy, temperature is deg C,
-// water is litres, areas are m2, mass is kg of fresh produce.
+// water is litres, areas are m2, mass is kg of fresh produce, food energy is kcal per kg of it.
 
 #include <array>
 #include <cstddef>
@@ -43,17 +43,18 @@ struct Species {
     double flower_start;          // progress at which flowering begins (1 = never)
     double fruit_start;           // progress at which fruit begins (1 = never)
     double ready_window_days;     // days a Ready plant keeps full value before it spoils
+    double kcal_per_kg;           // food energy of the fresh produce: what feeds the colony (colony.hpp)
 };
 
 inline constexpr std::array<Species, 4> kSpecies = {{
     //  id  key        name                    kind          days   ppfd  ppfd   temp:  min  low  high  max  water  canopy  nutr   yield  flower fruit window
-    //                                                       mature opt   max                               use    m2      use    kg     start  start days
-    {0, "lettuce", "Butterhead lettuce",  Kind::Leafy,    30.0, 250.0, 500.0,  4.0, 16.0, 22.0, 30.0, 2.0, 0.050, 0.020, 0.20, 1.00, 1.00, 5.0},
-    {1, "radish",  "Cherry Belle radish", Kind::Root,     26.0, 250.0, 500.0,  5.0, 14.0, 20.0, 28.0, 1.5, 0.020, 0.012, 0.03, 1.00, 1.00, 4.0},
-    {2, "tomato",  "Dwarf tomato",        Kind::Fruiting, 85.0, 450.0, 900.0, 10.0, 18.0, 26.0, 35.0, 3.5, 0.090, 0.060, 0.90, 0.55, 0.72, 7.0},
+    //                                                       mature opt   max                               use    m2      use    kg     start  start days   kcal/kg
+    {0, "lettuce", "Butterhead lettuce",  Kind::Leafy,    30.0, 250.0, 500.0,  4.0, 16.0, 22.0, 30.0, 2.0, 0.050, 0.020, 0.20, 1.00, 1.00, 5.0,  150.0},
+    {1, "radish",  "Cherry Belle radish", Kind::Root,     26.0, 250.0, 500.0,  5.0, 14.0, 20.0, 28.0, 1.5, 0.020, 0.012, 0.03, 1.00, 1.00, 4.0,  160.0},
+    {2, "tomato",  "Dwarf tomato",        Kind::Fruiting, 85.0, 450.0, 900.0, 10.0, 18.0, 26.0, 35.0, 3.5, 0.090, 0.060, 0.90, 0.55, 0.72, 7.0,  180.0},
     // The tuber crop's "flowering" and "fruiting" stages are the flowering and the tuber-bulking phases; the
     // tubers are underground, so the plant's look only changes colour as the foliage ages toward harvest.
-    {3, "potato",  "Dwarf potato",        Kind::Tuber,   100.0, 400.0, 800.0,  7.0, 15.0, 21.0, 30.0, 3.0, 0.100, 0.050, 0.35, 0.55, 0.70, 10.0},
+    {3, "potato",  "Dwarf potato",        Kind::Tuber,   100.0, 400.0, 800.0,  7.0, 15.0, 21.0, 30.0, 3.0, 0.100, 0.050, 0.35, 0.55, 0.70, 10.0, 770.0},
 }};
 
 inline const Species* find_species(int id) {

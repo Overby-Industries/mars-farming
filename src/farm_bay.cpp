@@ -9,6 +9,8 @@
 using namespace godot;
 using aevoria::farm::Bay;
 using aevoria::farm::Bed;
+using aevoria::farm::Difficulty;
+using aevoria::farm::Outcome;
 using aevoria::farm::EventType;
 using aevoria::farm::Kind;
 using aevoria::farm::Plant;
@@ -26,6 +28,19 @@ const char *kind_name(Kind k) {
     }
     return "leafy";
 }
+
+const char *outcome_name(Outcome o) {
+    switch (o) {
+        case Outcome::Running: return "running";
+        case Outcome::Success: return "success";
+        case Outcome::Evacuated: return "evacuated";
+        case Outcome::EvacuatedWithLosses: return "evacuated_with_losses";
+        case Outcome::Extinct: return "extinct";
+    }
+    return "running";
+}
+
+Difficulty difficulty_from(int d) { return static_cast<Difficulty>(std::clamp(d, 0, 2)); }
 
 String to_godot(std::string_view sv) { return String::utf8(sv.data(), static_cast<int64_t>(sv.size())); }
 
@@ -53,6 +68,10 @@ void FarmBay::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_status"), &FarmBay::get_status);
     ClassDB::bind_method(D_METHOD("set_setting", "key", "value"), &FarmBay::set_setting);
     ClassDB::bind_method(D_METHOD("get_setting", "key"), &FarmBay::get_setting);
+    ClassDB::bind_method(D_METHOD("start_colony", "difficulty", "demand_scale", "reserve_scale"), &FarmBay::start_colony, DEFVAL(1.0), DEFVAL(1.0));
+    ClassDB::bind_method(D_METHOD("stop_colony"), &FarmBay::stop_colony);
+    ClassDB::bind_method(D_METHOD("get_colony"), &FarmBay::get_colony);
+    ClassDB::bind_static_method("FarmBay", D_METHOD("get_difficulty_rules", "difficulty"), &FarmBay::get_difficulty_rules);
     ClassDB::bind_method(D_METHOD("advance_hours", "hours"), &FarmBay::advance_hours);
     ClassDB::bind_method(D_METHOD("set_time_scale", "hours_per_second"), &FarmBay::set_time_scale);
     ClassDB::bind_method(D_METHOD("get_time_scale"), &FarmBay::get_time_scale);
@@ -67,6 +86,7 @@ void FarmBay::_bind_methods() {
                           PropertyInfo(Variant::INT, "stage")));
     ADD_SIGNAL(MethodInfo("plant_died", PropertyInfo(Variant::INT, "bed"), PropertyInfo(Variant::INT, "slot")));
     ADD_SIGNAL(MethodInfo("day_changed", PropertyInfo(Variant::INT, "day")));
+    ADD_SIGNAL(MethodInfo("colony_outcome", PropertyInfo(Variant::INT, "outcome")));
 
     ClassDB::bind_integer_constant(get_class_static(), "", "STAGE_EMPTY", static_cast<int>(Stage::Empty));
     ClassDB::bind_integer_constant(get_class_static(), "", "STAGE_SEED", static_cast<int>(Stage::Seed));
@@ -77,6 +97,15 @@ void FarmBay::_bind_methods() {
     ClassDB::bind_integer_constant(get_class_static(), "", "STAGE_READY", static_cast<int>(Stage::Ready));
     ClassDB::bind_integer_constant(get_class_static(), "", "STAGE_OVERRIPE", static_cast<int>(Stage::Overripe));
     ClassDB::bind_integer_constant(get_class_static(), "", "STAGE_DEAD", static_cast<int>(Stage::Dead));
+
+    ClassDB::bind_integer_constant(get_class_static(), "", "DIFFICULTY_EASY", static_cast<int>(Difficulty::Easy));
+    ClassDB::bind_integer_constant(get_class_static(), "", "DIFFICULTY_INTERMEDIATE", static_cast<int>(Difficulty::Intermediate));
+    ClassDB::bind_integer_constant(get_class_static(), "", "DIFFICULTY_DIFFICULT", static_cast<int>(Difficulty::Difficult));
+    ClassDB::bind_integer_constant(get_class_static(), "", "OUTCOME_RUNNING", static_cast<int>(Outcome::Running));
+    ClassDB::bind_integer_constant(get_class_static(), "", "OUTCOME_SUCCESS", static_cast<int>(Outcome::Success));
+    ClassDB::bind_integer_constant(get_class_static(), "", "OUTCOME_EVACUATED", static_cast<int>(Outcome::Evacuated));
+    ClassDB::bind_integer_constant(get_class_static(), "", "OUTCOME_EVACUATED_WITH_LOSSES", static_cast<int>(Outcome::EvacuatedWithLosses));
+    ClassDB::bind_integer_constant(get_class_static(), "", "OUTCOME_EXTINCT", static_cast<int>(Outcome::Extinct));
 }
 
 FarmBay::FarmBay() : bay_(1) {}
@@ -95,6 +124,7 @@ void FarmBay::emit_events() {
             case EventType::StageChanged: emit_signal("plant_stage_changed", e.bed, e.slot, e.value); break;
             case EventType::PlantDied: emit_signal("plant_died", e.bed, e.slot); break;
             case EventType::DayChanged: emit_signal("day_changed", e.value); break;
+            case EventType::ColonyOutcome: emit_signal("colony_outcome", e.value); break;
         }
     }
 }
@@ -199,6 +229,7 @@ Array FarmBay::get_species_list() const {
         d["yield_kg"] = s.yield_kg;
         d["flower_start"] = s.flower_start;
         d["fruit_start"] = s.fruit_start;
+        d["kcal_per_kg"] = s.kcal_per_kg;
         out.push_back(d);
     }
     return out;
@@ -274,6 +305,69 @@ Variant FarmBay::get_setting(const String &key) const {
     if (key == "tank_capacity_l") return bay_.tank_capacity_l;
     if (key == "nutrient_stock") return bay_.nutrient_stock;
     return Variant();
+}
+
+void FarmBay::start_colony(int difficulty, double demand_scale, double reserve_scale) {
+    bay_.start_colony(difficulty_from(difficulty), demand_scale, reserve_scale);
+}
+
+void FarmBay::stop_colony() { bay_.stop_colony(); }
+
+Dictionary FarmBay::get_difficulty_rules(int difficulty) {
+    const aevoria::farm::ColonyRules &r = aevoria::farm::colony_rules(difficulty_from(difficulty));
+    Dictionary d;
+    d["difficulty"] = std::clamp(difficulty, 0, 2);
+    d["name"] = String(r.name);
+    d["crew"] = r.crew;
+    d["need_kcal_day"] = r.need_kcal_day;
+    d["start_reserve_days"] = r.start_reserve_days;
+    d["grace_days"] = r.grace_days;
+    d["goal_days"] = r.goal_days;
+    d["evacuation_share"] = r.evacuation_share;
+    d["score_multiplier"] = r.score_multiplier;
+    return d;
+}
+
+Dictionary FarmBay::get_colony() const {
+    const aevoria::farm::Colony &c = bay_.colony;
+    Dictionary d;
+    d["started"] = c.started();
+    d["running"] = c.running();
+    d["outcome"] = static_cast<int>(c.outcome());
+    d["outcome_name"] = String(outcome_name(c.outcome()));
+    if (!c.started()) return d;
+    const aevoria::farm::ColonyRules &r = c.rules();
+    d["difficulty"] = static_cast<int>(c.difficulty());
+    d["difficulty_name"] = String(r.name);
+    d["crew"] = r.crew;
+    d["survivors"] = c.survivors();
+    d["day"] = c.day();
+    d["goal_days"] = r.goal_days;
+    d["grace_days"] = r.grace_days;
+    d["need_kcal_day"] = c.need_kcal_day();
+    d["stock_kcal"] = c.stock_kcal();
+    d["reserve_days"] = c.reserve_days();
+    d["starving"] = c.starving();
+    d["hunger_days"] = c.hunger_days();
+    d["hungry_days_total"] = c.hungry_days_total();
+    d["harvested_kcal"] = c.harvested_kcal();
+    d["eaten_kcal"] = c.eaten_kcal();
+    d["crops_grown"] = c.crops_grown();
+    d["plants_lost"] = c.plants_lost();
+    const aevoria::farm::ScoreBreakdown b = c.score();
+    Dictionary parts;
+    parts["days"] = b.days;
+    parts["food"] = b.food;
+    parts["variety"] = b.variety;
+    parts["reserve"] = b.reserve;
+    parts["lost"] = b.lost;
+    parts["hunger"] = b.hunger;
+    parts["bonus"] = b.bonus;
+    parts["multiplier"] = b.multiplier;
+    parts["total"] = static_cast<int64_t>(b.total);
+    d["score"] = static_cast<int64_t>(b.total);
+    d["score_parts"] = parts;
+    return d;
 }
 
 void FarmBay::advance_hours(double hours) {

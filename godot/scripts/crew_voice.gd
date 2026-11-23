@@ -16,11 +16,16 @@ extends Node
 ## needs `audio/general/text_to_speech` on in project.godot. Without voices (or headless) the captions still appear. `audio`
 ## switches the speech, `enabled` switches the whole thing (what the tests and the screenshot scripts use).
 ##
+## The player can pick a male or a female voice (`set_gender()`, `available_genders()`): Godot lists a PC's voices by name only,
+## so the gender comes from the name (`classify_voice()`: David and Mark are male, Zira and Hazel female, and so on). Only the
+## genders the PC has a voice for are offered, and the choice is remembered (scripts/prefs.gd).
+##
 ##   var voice = CrewVoice.new()                   # const CrewVoice = preload("res://scripts/crew_voice.gd")
 ##   add_child(voice)
 ##   voice.setup(self, astronaut, hud_root, {"accent": Color("e8861f")})       # the scene: a bay, BED_CENTERS, selected ...
 
 const SlotButtons = preload("res://scripts/slot_buttons.gd")
+const Prefs = preload("res://scripts/prefs.gd")
 
 signal said(text: String, key: String)
 signal asked                      # the player pressed Ask crew
@@ -37,6 +42,7 @@ var describe_selection := true      # off: selecting a slot is not described (th
 var audio := true          # spoken aloud (text-to-speech); off leaves the captions
 var volume := 80           # 0 to 100
 var pitch := 0.95
+var gender := "male"      # "male" or "female": which voice speaks (see available_genders())
 var rate := 1.0
 var medium := "growing medium"      # what the beds are filled with ("regolith" in the dome)
 var reservoir := "water tank"       # what holds the water ("ice-melt reserve" in the dome)
@@ -60,6 +66,7 @@ var _news: Array = []      # things that happened and are worth a line: {"key", 
 var _species_by_key := {}
 var _tts := false
 var _voice_id := ""
+var _voices := {}          # "male" / "female" -> {"id", "name", "language"}: the English voices this PC has
 var _caption_box: Control
 var _caption_label: Label
 var _caption_left := 0.0
@@ -75,11 +82,106 @@ func setup(p_scene: Node, p_astronaut: Node3D, hud_root: Control, palette := {})
 	_tts = DisplayServer.has_feature(DisplayServer.FEATURE_TEXT_TO_SPEECH) and DisplayServer.tts_get_voices().size() > 0
 	if _tts:
 		var english := DisplayServer.tts_get_voices_for_language("en")
-		_voice_id = english[0] if english.size() > 0 else DisplayServer.tts_get_voices()[0]["id"]
+		_voice_id = english[0] if english.size() > 0 else DisplayServer.tts_get_voices()[0]["id"]      # any voice at all, until the genders are sorted out
+		_find_voices()
+		var wanted := str(Prefs.read("voice", "gender", "male"))
+		var offered := available_genders()
+		if not offered.is_empty():
+			set_gender(wanted if offered.has(wanted) else offered[0], false, false)
 	_build_caption(hud_root, palette)
 
 func _process(delta: float) -> void:
 	tick(delta)
+
+# ---------------------------------------------------------------------------------------------------------
+# male and female voice
+# ---------------------------------------------------------------------------------------------------------
+
+const FEMALE_NAMES := ["zira", "hazel", "susan", "linda", "heather", "catherine", "aria", "jenny", "samantha", "victoria", "karen", "moira",
+		"tessa", "fiona", "allison", "ava", "kathy", "nicky", "veena", "serena", "sandy", "shelley", "flo", "joanna", "salli", "kimberly",
+		"kendra", "ivy", "amy", "emma", "nicole", "olivia", "libby", "sonia", "natasha", "clara", "mia", "eva", "elsa", "ana", "bella", "zoe"]
+const MALE_NAMES := ["david", "mark", "george", "richard", "james", "ravi", "sean", "guy", "ryan", "alex", "daniel", "fred", "tom", "aaron",
+		"arthur", "gordon", "lee", "oliver", "rishi", "reed", "eddy", "ralph", "albert", "bruce", "junior", "joey", "justin", "matthew", "brian",
+		"russell", "geraint", "liam", "thomas", "william", "mitchell", "christopher", "eric", "kevin", "roger", "evan"]
+const PREVIEW := "Hello, I am your crew voice. Let us grow some food."
+
+# "male", "female" or "" for a voice name such as "Microsoft Zira - English (United States)" (or an espeak variant such as "en+f3").
+static func classify_voice(voice_name: String) -> String:
+	var lower := voice_name.to_lower()
+	var words := PackedStringArray()
+	var word := ""
+	for i in lower.length():
+		var c := lower[i]
+		if (c >= "a" and c <= "z") or (c >= "0" and c <= "9") or c == "+":
+			word += c
+		else:
+			if word != "":
+				words.append(word)
+			word = ""
+	if word != "":
+		words.append(word)
+	for w in words:
+		if w == "female" or w == "woman" or w.begins_with("female"):
+			return "female"
+	for w in words:
+		if w == "male" or w == "man" or w.begins_with("male"):
+			return "male"
+	for w in words:
+		if FEMALE_NAMES.has(w):
+			return "female"
+		if MALE_NAMES.has(w):
+			return "male"
+		# espeak and speech-dispatcher variants: "en+f3" is a woman, "en+m2" a man
+		var plus := w.rfind("+")
+		if plus >= 0 and plus + 2 <= w.length() and w[plus + 1] == "f" and w.substr(plus + 2).is_valid_int():
+			return "female"
+		if plus >= 0 and plus + 2 <= w.length() and w[plus + 1] == "m" and w.substr(plus + 2).is_valid_int():
+			return "male"
+	return ""
+
+func _find_voices() -> void:
+	_voices = {}
+	var all: Array = DisplayServer.tts_get_voices()
+	var english: Array = []
+	for v in all:
+		if str(v.get("language", "")).to_lower().begins_with("en"):
+			english.append(v)
+	if english.is_empty():
+		english = all
+	for v in english:
+		var g := classify_voice(str(v.get("name", "")))
+		if g == "":
+			continue
+		var us := str(v.get("language", "")).to_lower().replace("-", "_").begins_with("en_us")
+		var have: Dictionary = _voices.get(g, {})
+		var have_us := str(have.get("language", "")).to_lower().replace("-", "_").begins_with("en_us")
+		if have.is_empty() or (us and not have_us):        # the first of each gender, American English preferred
+			_voices[g] = {"id": v["id"], "name": str(v.get("name", "")), "language": str(v.get("language", ""))}
+
+# The genders this PC has a voice for: some of ["male", "female"] (empty without speech).
+func available_genders() -> Array:
+	var out: Array = []
+	for g in ["male", "female"]:
+		if _voices.has(g):
+			out.append(g)
+	return out
+
+# The voice's own name, for a tooltip ("Microsoft Zira - English (United States)"), or "".
+func voice_name(g: String) -> String:
+	return str((_voices.get(g, {}) as Dictionary).get("name", ""))
+
+# Speak with the male or the female voice from now on. `preview` has the crew say a line in it; `save` remembers the choice.
+func set_gender(g: String, preview := true, save := true) -> bool:
+	if not _voices.has(g):
+		return false
+	gender = g
+	_voice_id = (_voices[g] as Dictionary)["id"]
+	pitch = 0.95 if g == "male" else 1.05
+	if save:
+		Prefs.write("voice", "gender", g)
+	if preview:
+		say(PREVIEW, "voice_preview")
+	return true
 
 func set_audio(on: bool) -> void:
 	audio = on
@@ -111,6 +213,8 @@ func tick(delta: float) -> void:
 		if scene.selected.x >= 0 and describe_selection:
 			say(describe_slot(scene.selected.x, scene.selected.y), "describe", slot_point(scene.selected.x, scene.selected.y))
 	if not spontaneous:
+		return
+	if scene.has_method("voice_held") and scene.voice_held():       # a picker or an ending covers the game: not now
 		return
 	_think -= delta
 	if _think > 0.0:
@@ -285,6 +389,11 @@ func advice(ignore := false) -> Dictionary:
 			dry[b] = st
 		if has_plants and st["nutrient"] < SlotButtons.NEED:
 			hungry[b] = st
+	# 0. the scene has something that cannot wait (the colony is out of food)
+	if scene.has_method("urgent_notes"):
+		for note in scene.urgent_notes():
+			if _due(note["key"], REPEAT_S * 0.5, ignore):
+				return note
 	# 1. a harvest is waiting
 	if not ready.is_empty() and _due("ready", REPEAT_S * 0.6, ignore):
 		var first: Array = ready[0]

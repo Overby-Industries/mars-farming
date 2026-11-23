@@ -12,6 +12,8 @@ extends SceneTree
 # point), `back` (turned round to face the airlock), `airlock` (close up on the airlock and the supply crates), or `wide`
 # (pulled back to take in the whole dome). idle_seconds is where the astronaut's idle animation is frozen (default 3).
 
+const Prefs = preload("res://scripts/prefs.gd")
+
 func _initialize() -> void:
 	_run()
 
@@ -22,11 +24,15 @@ func _run() -> void:
 	var days := int(args[1]) if args.size() > 1 else 45
 	var mode: String = args[2] if args.size() > 2 else "noon"
 	var view: String = args[3] if args.size() > 3 else "default"
+	Prefs.path = "user://shot_prefs.cfg"      # the picture starts a colony: its choices go to a scratch file, never the player's own
 	var scene: Node3D = (load("res://scenes/dome.tscn") as PackedScene).instantiate()
+	scene.ask_difficulty = false              # no difficulty picker over the picture
 	root.add_child(scene)
 	scene.set_speed(0.0)                      # paused before the first frame, so the clock starts exactly at 06:00
 	scene._next_storm_sol = 1000000
 	await process_frame
+	scene.colony_ui.choose(1, false)          # an Intermediate colony, so the bar along the top shows
+	scene.set_speed(0.0)
 	var crops := ["potato", "lettuce", "radish", "tomato"]
 	for b in 4:
 		scene.crop_key = crops[b]
@@ -89,4 +95,5 @@ func _run() -> void:
 	var path := ProjectSettings.globalize_path("res://shots/%s" % (shot_name if jpg else shot_name + ".png"))
 	DirAccess.make_dir_recursive_absolute(path.get_base_dir())
 	print("saved ", path, " err=", img.save_jpg(path, 0.88) if jpg else img.save_png(path))
+	Prefs.erase()
 	quit(0)

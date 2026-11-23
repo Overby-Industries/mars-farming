@@ -80,6 +80,7 @@ var _b_start: Button
 var _b_show: Button
 var _b_days: Button
 var _b_watch: Button
+var _b_voice: Button
 var _b_skip: Button
 var _b_new: Button
 var _b_keep: Button
@@ -171,9 +172,9 @@ func _make_steps() -> Array:
 			"hint": "Ask as often as you like.",
 			"say": "Not sure what to do next? Press Ask crew, or the C key, and I will say the most useful thing right now."}]},
 		{"id": "finish", "title": "Training complete", "lesson": 0, "phases": [{
-			"text": "That is the whole loop: sow, grow, water, harvest, and ask me when you are unsure. Start a fresh game, or keep playing in this farm.",
+			"text": "That is the whole loop: sow, grow, water, harvest, and ask me when you are unsure. In a new game you choose how hard the colony's situation is, and win by keeping the crew fed. Start one, or keep playing in this farm.",
 			"hint": "The How to play button at the bottom brings this training back any time.",
-			"say": "Training complete. That is the whole loop: sow, grow, water, harvest, and ask me when you are unsure. Start a fresh game, or keep playing in this farm."}]},
+			"say": "Training complete. That is the whole loop: sow, grow, water, harvest, and ask me when you are unsure. In a new game you choose how hard the colony's situation is, and win by keeping the crew fed. Start one, or keep playing in this farm."}]},
 	]
 
 func _fmt(text: String) -> String:
@@ -242,6 +243,8 @@ func _show_phase() -> void:
 	_hint_shown = ""
 	_refresh_hint()
 	_b_start.visible = id == "welcome"
+	_b_voice.visible = id == "welcome" and voice.available_genders().size() > 1
+	_refresh_voice_button()
 	_b_show.visible = id != "welcome" and id != "finish"
 	_b_days.visible = _is_waiting_for_time()
 	_b_watch.visible = id != "finish"
@@ -391,6 +394,14 @@ func press_start() -> void:
 func show_me() -> void:
 	if not closed and current_id() != "welcome" and current_id() != "finish":
 		_start_demo()
+
+func _refresh_voice_button() -> void:
+	_b_voice.text = "Voice: %s" % str(voice.gender).capitalize()
+
+# The welcome offers the crew's voice, male or female (when this PC has both), so the training is heard in the one the player wants.
+func toggle_voice() -> void:
+	voice.set_gender("female" if voice.gender == "male" else "male")
+	_refresh_voice_button()
 
 func skip_days() -> void:
 	if not closed and _is_waiting_for_time():
@@ -759,12 +770,13 @@ func _build_overlay() -> void:
 	_b_show = _make_button("Show me", show_me)
 	_b_days = _make_button("Skip 5 days", skip_days)
 	_b_watch = _make_button("Watch it all", toggle_watch)
+	_b_voice = _make_button("Voice: Male", toggle_voice)
 	_spacer = Control.new()
 	_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_b_skip = _make_button("Skip training", func(): finish(true))
 	_b_new = _make_button("Start a new game", func(): finish(true))
 	_b_keep = _make_button("Keep this farm", func(): finish(false))
-	for c in [_b_start, _b_show, _b_days, _b_watch, _spacer, _b_skip, _b_new, _b_keep]:
+	for c in [_b_start, _b_voice, _b_show, _b_days, _b_watch, _spacer, _b_skip, _b_new, _b_keep]:
 		row.add_child(c)
 
 	# the ring and the pointer are drawn on top of everything

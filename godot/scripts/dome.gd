@@ -50,6 +50,7 @@ const ASTRONAUT_YAW_DEG := -12.0          # 0 faces down the dome, away from the
 
 const SlotButtons = preload("res://scripts/slot_buttons.gd")
 const CrewVoice = preload("res://scripts/crew_voice.gd")
+const ColonyUI = preload("res://scripts/colony_ui.gd")
 const TRAINING_SCENE := "res://scenes/training.tscn"      # the how-to-play training for new players (scripts/training.gd)
 
 var bay := FarmBay.new()
@@ -57,6 +58,12 @@ var builder := FarmShapeBuilder.new()
 var slot_buttons: Control                  # the floating buttons over the slots (scripts/slot_buttons.gd)
 var voice: Node                            # the crew member's voice (scripts/crew_voice.gd)
 var hud_palette := {}                       # the HUD's accent, panel and text colours; the training scene dresses its coach panel to match
+var colony_ui: Control                     # the colony bar, the difficulty picker, the ending and the leaderboard (scripts/colony_ui.gd); none while the training hosts the game
+var ask_difficulty := DisplayServer.get_name() != "headless"      # open the difficulty picker with the scene; headless runs (the tests) start as a sandbox
+var colony_place := "dome"                    # how the ending texts name the place
+var colony_tuning := {"demand": [0.5, 0.6, 0.6], "reserve": [1.0, 1.6, 1.6]}                    # scales for what this bay can grow, by difficulty: {"demand": [...], "reserve": [...]}, 1.0 when absent
+# The dome grows less than the station (its potato takes about 150 days under the sun, and storms dim it): its colony asks for
+# 0.5 to 0.6 of the food of the station's, with a longer reserve on the two harder modes (see tests/test_colony.cpp).
 var astronaut: Node3D
 var astronaut_recipe := {}                  # optional look of the crew member (scripts/astronaut.gd lists the keys); set before the scene enters the tree
 
@@ -634,8 +641,27 @@ func _build_hud() -> void:
 	voice.reservoir = "ice-melt reserve"
 	voice.intro = "Dome greenhouse online. Pick a slot and I will tell you about it, or press Ask crew for what to do next. New here? Press How to play."
 
-# What the crew voice may add to its usual advice (scripts/crew_voice.gd calls this): the dust and the solar power.
+	# the colony: its bar, the choice of difficulty and voice, the ending and the leaderboard (the training hosts the game without one)
+	if not has_meta("training"):
+		colony_ui = ColonyUI.new()
+		root.add_child(colony_ui)
+		colony_ui.setup(self, hud_palette, ask_difficulty)
+
+# What the crew voice may add to its usual advice (scripts/crew_voice.gd calls this): the colony's food, the dust and the solar power.
 func voice_notes() -> Array:
+	var notes: Array = colony_ui.voice_notes() if colony_ui != null else []
+	notes.append_array(_weather_notes())
+	return notes
+
+# What cannot wait (scripts/crew_voice.gd calls this): the colony is out of food.
+func urgent_notes() -> Array:
+	return colony_ui.urgent_notes() if colony_ui != null else []
+
+# While the difficulty picker, an ending or the leaderboard covers the game, the crew does not chat (scripts/crew_voice.gd asks).
+func voice_held() -> bool:
+	return colony_ui != null and ["picker", "ending", "board"].has(colony_ui.phase)
+
+func _weather_notes() -> Array:
 	var s := bay.get_status()
 	var sun := roundi(100.0 * exp(-0.5 * maxf(0.0, tau - 0.5)))
 	if storm_active and tau > 1.5:

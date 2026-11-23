@@ -138,7 +138,7 @@ func _run() -> void:
 	for pc in scene.find_children("*", "PanelContainer", true, false):
 		if pc.get_parent() is MarginContainer and pc.get_parent().name != "CrewCaption" and (pc as Control).is_visible_in_tree():      # the HUD's three panels, not a popup's frame
 			panels.append((pc as Control).get_global_rect().grow(6.0))
-	check(panels.size() == 3, "three HUD panels (left, right, bottom): %s" % str(panels))
+	check(panels.size() == 4, "four HUD panels (left, right, bottom, and the colony bar along the top): %s" % str(panels))
 	var view := Rect2(Vector2.ZERO, Vector2(1600, 900))
 	var hidden := 0
 	var under_hud := 0

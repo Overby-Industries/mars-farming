@@ -8,7 +8,7 @@ its sibling [Aevoria Space Station Farming](https://github.com/Overby-Industries
 
 **Status: an early start.** One dome, four crops (potato is the staple), a growth model with tests, procedural
 plants, Blender-modelled props, dust storms, a playable dome scene with a floating button over every crop, a crew astronaut
-built from modular suit components who talks you through the farm, and a short training for new players. Not a finished game.
+built from modular suit components who talks you through the farm, a short training for new players, and a colony to feed on three difficulties, with a score and a leaderboard. Not a finished game.
 See [docs/DESIGN.md](docs/DESIGN.md) for what exists and what does not.
 
 ![The dome at noon: a floating button over every slot says Harvest, Water, Clear or how far the plant has grown, and the crew astronaut on the walkway describes the plant that is selected](docs/dome.jpg)
@@ -17,9 +17,9 @@ See [docs/DESIGN.md](docs/DESIGN.md) for what exists and what does not.
 
 | Path | What it is |
 |---|---|
-| `core/` | The farm simulation in plain C++17, header-only, no Godot types: `species.hpp` (the crops), `plant.hpp` (growth, stress, harvest), `bay.hpp` (beds, lights, sun, dust, water, nutrients, clock) |
+| `core/` | The farm simulation in plain C++17, header-only, no Godot types: `species.hpp` (the crops), `plant.hpp` (growth, stress, harvest), `bay.hpp` (beds, lights, sun, dust, water, nutrients, clock), `colony.hpp` (the colony: food, hunger, the three difficulties, the score) |
 | `src/` | The GDExtension: `FarmBay` (the simulation as a node), `FarmShapeBuilder` (recipe to 3D shape), `FarmSkinGenerator` (recipe to texture), plus the mesh and plant geometry code |
-| `godot/` | The Godot project: `scenes/dome.tscn` (the game slice), `scenes/training.tscn` (the training for new players), `scenes/showcase.tscn` (every crop at every stage), `scripts/` (including `slot_buttons.gd`, the floating buttons over the slots, `crew_voice.gd`, the crew member's voice, `training.gd`, the coach, and `astronaut.gd`, which assembles the crew member), `models/` (the Blender props as `.glb`, and the astronaut's eleven suit components in `models/astronaut/`), `tests/` |
+| `godot/` | The Godot project: `scenes/dome.tscn` (the game slice), `scenes/training.tscn` (the training for new players), `scenes/showcase.tscn` (every crop at every stage), `scripts/` (including `slot_buttons.gd`, the floating buttons over the slots, `crew_voice.gd`, the crew member's voice, `training.gd`, the coach, `colony_ui.gd` and `leaderboard.gd`, the colony screens, and `astronaut.gd`, which assembles the crew member), `models/` (the Blender props as `.glb`, and the astronaut's eleven suit components in `models/astronaut/`), `tests/` |
 | `blender/` | `build_assets.py` builds the props in `godot/models/` from code; `build_astronaut.py` builds the suit's components in `godot/models/astronaut/` |
 | `tests/` | The C++ test suite for `core/` (CMake) |
 | `docs/` | [DESIGN.md](docs/DESIGN.md) and [GRAPHICS_GUIDE.md](docs/GRAPHICS_GUIDE.md) |
@@ -70,6 +70,32 @@ the plant it is talking about. The speech is the operating system's text-to-spee
 already has and ships none (it needs `audio/general/text_to_speech` on in `project.godot`, which it is); the *Crew voice* box
 switches the speech off and leaves the captions. With no voices installed, and in headless runs, there are only captions.
 
+## The colony, three difficulties and a score
+
+![The difficulty picker: three situations, and a male or a female crew voice](docs/difficulty.jpg)
+
+You are feeding a colony. When a game starts you choose **how hard its situation is** and, if the PC has both, a **male or a female crew voice**.
+The bar along the top then shows the mode, the crew, the day, how many days of food are in store, and the score. Harvests fill the store, the
+crew eats from it every hour, and the game is won by keeping the crew fed for the whole goal period:
+
+| Mode | Crew | Keep them fed | If the food runs out |
+|---|---|---|---|
+| **Easy** | 4 | 120 days | Earth is safe: the whole crew is evacuated home and the colony fails |
+| **Intermediate** | 8 | 200 days | Earth is damaged and can take only half the crew back: the rest are lost |
+| **Difficult** | 12 | 300 days | Earth cannot be lived on: there is nowhere to go, and the colony is extinct |
+
+A colony that grows nothing always fails: it eats its store, goes hungry for 14, 10 or 7 days, and then the ending comes.
+The dome grows less than the station (its potato takes about 150 days under the sun, and dust storms dim it), so its colony asks for about half the food, with a longer reserve on the two harder modes.
+
+The score is worked out by the core, so it is the same however the game is played: 3 points a day the colony lasts, 0.5 for each kcal grown (every
+crop has its food energy: a potato feeds a colony far better than a lettuce), 150 for each different crop harvested, 10 a day of food in store, 1,000
+for making it, less 40 for each plant lost and 25 for each hungry day, times 1, 1.5 or 2 for the mode. The ending shows how it adds up and asks for a
+name for the **leaderboard**: the ten best runs for each mode, kept on this PC (nothing is sent anywhere). *Keep playing* carries on in the same bay
+after an ending, and *Sandbox* in the picker skips the colony altogether. The male and the female voice are the PC's own text-to-speech voices
+(Windows has David and Zira, for instance); the choice is remembered, and a PC with only one kind of voice is told so.
+
+![A colony kept fed for 120 days: the ending, the score by its parts, and a name for the leaderboard](docs/ending.jpg)
+
 ## Training for new players
 
 ![The training: the coach panel over the real game, with a ring on the Water button of the bed that has run dry](docs/training.jpg)
@@ -115,6 +141,7 @@ godot --headless --path godot -s res://tests/astronaut_test.gd
 godot --headless --path godot -s res://tests/dome_test.gd
 godot --headless --path godot -s res://tests/crew_ui_test.gd
 godot --headless --path godot -s res://tests/training_test.gd
+godot --headless --path godot -s res://tests/colony_ui_test.gd
 ```
 
 On a fresh checkout the first `--import` can exit with a crash code (on Windows with Godot 4.6.3 it does, from
@@ -126,7 +153,8 @@ top is `shot_growth.gd -- dome.jpg 45 noon default 11` (a name ending in `.jpg` 
 `godot/shots/`; the last number is the second of the astronaut's idle animation to freeze, and 11 s has its head turned toward
 the beds). `shot_astronaut.gd` photographs the suit on a bare stage (`shot_astronaut.gd -- astronaut.jpg 0 front,back,three_quarter`), and
 `shot_training.gd` photographs the training at one moment (the picture of the training is `shot_training.gd -- training.jpg dry`; the
-others are `welcome`, `sow`, `sow2`, `grow`, `harvest`, `select`, `ask`, `finish` and `watch`).
+others are `welcome`, `sow`, `sow2`, `grow`, `harvest`, `select`, `ask`, `finish` and `watch`), and `shot_colony.gd` photographs the colony screens (`shot_colony.gd -- difficulty.jpg picker`; the others are `bar`,
+`ending`, `success` and `board`).
 
 ## Release to itch.io
 
@@ -143,12 +171,12 @@ It needs Godot 4.6.3 with its Windows export templates, SCons and MSVC (as for b
 
 Every growth time, light need and yield in `core/species.hpp`, and every weather and power number in
 `godot/scripts/dome.gd`, is a **design value**: a starting point, not a validated agronomic or engineering model.
-Tune them by playing.
+Tune them by playing. The same goes for what the colony asks of the bay, its reserves and patience, and the score (`core/colony.hpp`).
 
 ## Roadmap
 
-Crew food demand and a reason to grow one crop over another, dust on the solar panels and on the dome, equipment
-faults and events, a better storm model, crops chosen for Mars, a save file, sound and tuning.
+Dust on the solar panels and on the dome, equipment faults and events, a better storm model, crops chosen for Mars, a save file,
+sound effects and music, an online leaderboard, and tuning.
 
 ## License
 

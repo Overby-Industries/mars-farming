@@ -16,7 +16,8 @@ if(FARM_BUILD_TESTS)
         tests/test_main.cpp
         tests/test_species.cpp
         tests/test_plant.cpp
-        tests/test_bay.cpp)
+        tests/test_bay.cpp
+        tests/test_colony.cpp)
     target_include_directories(farm_tests PRIVATE core)
     if(MSVC)
         target_compile_options(farm_tests PRIVATE /W4 /permissive- /utf-8)

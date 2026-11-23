@@ -40,3 +40,4 @@ inline void fail(const char* what, const char* file, int line) {
 void runSpeciesTests();
 void runPlantTests();
 void runBayTests();
+void runColonyTests();

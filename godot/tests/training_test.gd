@@ -8,6 +8,7 @@ extends SceneTree
 # The test is the clock: it ticks the training, the crew voice and the game's time together, and does not wait for frames.
 
 const Driver = preload("res://scripts/training_driver.gd")
+const Prefs = preload("res://scripts/prefs.gd")
 
 var checks := 0
 var failures := 0
@@ -90,6 +91,8 @@ func _initialize() -> void:
 func _run() -> void:
 	await process_frame
 	root.size = Vector2i(1600, 900)      # headless windows are tiny: lay the HUD and the camera out as they are in the game
+	Prefs.path = "user://test_prefs.cfg"      # the voice choice is remembered: never in the player's own file
+	Prefs.erase()
 
 	# ---- the scene: the project's own game, with a coach over it ----
 	var t := await make_training()
@@ -107,6 +110,17 @@ func _run() -> void:
 	check(t.current_id() == "welcome" and t._text.text.contains(t._crop_name()) and t._title.text == "Welcome aboard", "it opens with a welcome that names the crop")
 	check(t.voice.lines.size() == 1 and t.voice.lines[0]["key"] == "train_welcome_0" and t.voice.lines[0]["text"].begins_with("Welcome aboard"), "the crew says the welcome")
 	check(not t.voice._caption_box.visible, "and the panel is its caption, so the crew's own caption stays hidden")
+	check(farm.colony_ui == null and not farm.bay.get_colony()["started"], "the training hosts the game without a colony: a sandbox")
+	check(not t._b_voice.visible, "with no speech voice on the PC, the welcome has no voice button")
+	t.voice._voices = {"male": {"id": "m1", "name": "Test David", "language": "en_US"}, "female": {"id": "f1", "name": "Test Zira", "language": "en_US"}}
+	t._show_phase()
+	check(t._b_voice.visible and t._b_voice.text == "Voice: Male", "with both a male and a female voice it offers the choice: %s" % t._b_voice.text)
+	t.toggle_voice()
+	check(t.voice.gender == "female" and t._b_voice.text == "Voice: Female" and Prefs.read("voice", "gender", "") == "female", "and the button switches the crew to the female voice, and remembers it")
+	t.toggle_voice()
+	check(t.voice.gender == "male" and t._b_voice.text == "Voice: Male", "and back")
+	t.voice._voices = {}
+	t._show_phase()
 	var how := button(t, "How to play")
 	check(how != null and not how.visible, "the game's How to play button is hidden while the game is hosted")
 	check(t._b_start.visible and t._b_watch.visible and t._b_skip.visible and not t._b_show.visible and not t._b_new.visible, "the welcome offers Start, Watch it all and Skip training")
@@ -246,5 +260,6 @@ func _run() -> void:
 	check(t._b_new.visible and t._b_keep.visible, "it stops at the end, for the player to choose")
 	await discard(t)
 
+	Prefs.erase()
 	print("\n%d checks, %d failures" % [checks, failures])
 	quit(0 if failures == 0 else 1)

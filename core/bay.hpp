@@ -17,6 +17,7 @@
 #include <utility>
 #include <vector>
 
+#include "colony.hpp"
 #include "plant.hpp"
 
 namespace aevoria::farm {
@@ -61,13 +62,13 @@ struct Settings {
     bool auto_irrigate = false;
 };
 
-enum class EventType { StageChanged, PlantDied, DayChanged };
+enum class EventType { StageChanged, PlantDied, DayChanged, ColonyOutcome };
 
 struct Event {
     EventType type = EventType::StageChanged;
     int bed = -1;
     int slot = -1;
-    int value = 0;  // the new Stage, or the new day number
+    int value = 0;  // the new Stage, the new day number, or the colony's Outcome
 };
 
 class Bay {
@@ -82,6 +83,9 @@ public:
     double nutrient_stock = 20.0;     // units of concentrate
     double clock_h = 6.0;             // hour of the day, 0..24
     int day = 1;
+
+    // the colony this bay feeds (colony.hpp): not started until start_colony(), so a bare bay is a sandbox
+    Colony colony;
 
     // running totals
     double energy_wh = 0.0;
@@ -112,6 +116,13 @@ public:
 
     // ---- actions ----------------------------------------------------------------------
 
+    // Start the colony the bay feeds, on a difficulty (a full reserve, no hunger, the score at zero). `demand_scale` and
+    // `reserve_scale` shrink or stretch what the colony asks of the bay and the reserve it starts with, for a bay that
+    // grows less or more, or more slowly.
+    void start_colony(Difficulty d, double demand_scale = 1.0, double reserve_scale = 1.0) { colony.start(d, demand_scale, reserve_scale); }
+    void stop_colony() { colony.stop(); }
+
+
     // Sow a seed in an empty slot. Returns false for a bad slot, an unknown species or an occupied slot.
     bool plant(int bed_index, int slot, int species_id) {
         if (!valid(bed_index, slot) || find_species(species_id) == nullptr) return false;
@@ -136,6 +147,7 @@ public:
             harvested_kg += h->kg;
             harvested_by_species[static_cast<std::size_t>(h->species)] += h->kg;
             nutrient_stock += h->kg * kCompostUnitsPerKg;
+            colony.add_harvest(h->species, h->kg);
         }
         return h;
     }
@@ -270,6 +282,7 @@ private:
                 water_wanted += r.water_l;
                 nutrient_used += r.nutrient;
                 if (r.stage_changed) {
+                    if (p.stage == Stage::Dead) colony.note_plant_lost();
                     events_.push_back({p.stage == Stage::Dead ? EventType::PlantDied : EventType::StageChanged, bi, slot,
                                        static_cast<int>(p.stage)});
                 }
@@ -285,6 +298,9 @@ private:
 
             if (settings.auto_irrigate && b.moisture() < 0.4) irrigate(bi, 0.9 * b.water_capacity_l - b.water_l);
         }
+
+        const Outcome decided = colony.advance(dt);
+        if (decided != Outcome::Running) events_.push_back({EventType::ColonyOutcome, -1, -1, static_cast<int>(decided)});
 
         clock_h += dt;
         if (clock_h >= 24.0) {
