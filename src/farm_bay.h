@@ -22,6 +22,11 @@ namespace godot {
  * harvests; get_colony() reports its food, hunger, outcome and score; the colony_outcome signal says how it ended (OUTCOME_*).
  * Without start_colony() the bay is a sandbox.
  *
+ * A settlement has several bays (greenhouses or domes) and one colony: the first bay holds it, the others call link_colony(first), so
+ * what they harvest feeds it and it is advanced once. setup_settlement() says how many sites there are and whether the game terraforms
+ * (Mars: the plants' oxygen thickens the air, get_terraform()). The people grow in number when food is plentiful (colony_arrival) and
+ * the colony may build another unit when they fill the housing (colony_add_unit()).
+ *
  * Settings (set_setting / get_setting), all numbers except auto_irrigate which is a bool:
  *   temp_c temp_swing_c light_on_hour light_off_hour led_w_per_bed led_umol_per_joule
  *   led_optical_efficiency power_budget_w sun_peak_ppfd dust_tau shade reclaim_fraction auto_irrigate
@@ -34,8 +39,10 @@ private:
     double time_scale_ = 1.0;
     bool paused_ = false;
     int seed_ = 1;
+    int64_t linked_id_ = 0;        // the instance id of the bay this one is linked to (0: none), checked before every step
 
     void emit_events();
+    void check_link();
 
 protected:
     static void _bind_methods();
@@ -70,6 +77,14 @@ public:
     void start_colony(int difficulty, double demand_scale = 1.0, double reserve_scale = 1.0);
     void stop_colony();
     Dictionary get_colony() const;
+    Dictionary get_terraform() const;
+    void setup_settlement(int max_units, bool terraforming, int open_air_bonus);
+    void link_colony(FarmBay *primary);
+    void unlink_colony();
+    bool colony_add_unit();
+    void set_colony_growth(bool on);
+    void colony_finish_established();
+    static Dictionary get_expansion_rules();
     static Dictionary get_difficulty_rules(int difficulty);
 
     void advance_hours(double hours);

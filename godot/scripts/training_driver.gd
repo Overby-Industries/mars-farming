@@ -8,12 +8,16 @@ extends RefCounted
 ## `select_slot()`, `action_sow_bed()`, `BED_ROWS`, `BED_COLS`, `_refresh_all()` and, for the dome, `advance_world()`.
 
 const SlotButtons = preload("res://scripts/slot_buttons.gd")
+const Settlement = preload("res://scripts/settlement.gd")
 
 # Advance the whole world by game hours: the dome also has weather to move along. The room is refreshed once at the end
 # (`refresh` off, for the loops below that call this many times).
 static func advance(scene: Node3D, hours: float, refresh := true) -> void:
+	var st: Node = Settlement.peek()
 	if scene.has_method("advance_world"):
-		scene.advance_world(hours)
+		scene.advance_world(hours)                        # (the dome moves the weather, and every unit with it)
+	elif st != null and not scene.has_meta("training"):
+		st.advance_all(hours)
 	else:
 		scene.bay.advance_hours(hours)
 	if refresh:

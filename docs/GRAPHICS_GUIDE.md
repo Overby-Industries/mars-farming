@@ -190,6 +190,20 @@ dome uses `soil` twice: dark regolith in the beds, and a 512 x 512 rust ground t
 - the **sky**: a `ProceduralSkyMaterial` whose colours, the sun's energy and angle, the fog and the ambient light
   all follow the hour and the dust (`_update_sky()`), so noon, night and a storm each look different.
 
+## The overview: the settlement seen from above
+
+`scripts/settlement_view.gd` is the same in both games and builds nothing itself but the HUD, the camera and the pick; everything you see comes from the game's
+`scripts/settlement_look.gd`, which supplies `build_world()`, `make_pad(i)` (a free site), `make_unit(i)` (a dome, or a garden on the two outer sites), `animate()` and the little functions
+that colour a site by its state. Mars's:
+
+- **the plain**: a 700 m plane with the dome scene's own rust soil texture, ninety rocks and hills on the horizon; the soil is tinted green as the air thickens (`albedo_color` of the same material);
+- **the hub**: a squat habitat with a ring of lit windows, an antenna and a field of solar panels, and six corridors (cylinders lying on the ground) to the sites;
+- **a free site** is a rust-coloured torus foundation with four beacon posts and a faint ghost dome; it brightens and pulses when a dome may be built there, and greys out when it may not;
+- **a dome** is the dome scene's glass hemisphere with its ribs and foundation ring, green beds visible through the glass and an airlock stub toward the hub; **a garden** (the outer sites) is a
+  low walled plot with rows of crops and an irrigation mast;
+- **what the plants make** (`animate()` follows `get_terraform()` every frame): the sky colours lerp from butterscotch to blue, the fog thins, green fields spread at 50%, trees grow at 80%, a lake fills at 100%,
+  and banks of cloud gather round the horizon. For pictures, `view.debug_set_air(0.65)` draws the land as if the air were at 65%.
+
 ## Adding a crop
 
 1. Add a row to `kSpecies` in `core/species.hpp` (the tests check the table is well formed).

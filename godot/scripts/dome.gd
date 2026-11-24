@@ -25,6 +25,7 @@ const SPEEDS := [["Pause", 0.0], ["1x", 1.0], ["4x", 4.0], ["16x", 16.0], ["64x"
 # What the sun and the solar panels give under clear skies. DESIGN VALUES, not measurements.
 const SUN_PEAK_PPFD := 650.0     # umol/m2/s at the canopy at noon, through the dome glazing
 const SOLAR_BUDGET_W := 360.0    # watts the panels can give the LEDs on a clear day
+const ICE_MELT_L_DAY := 0.6      # litres of ice-melt a dome adds to its reserve each day (the dehumidifier loses a tenth of what the plants breathe out)
 const STORM_SEED := 42
 
 # The Blender-modelled props (blender/build_assets.py); each replaces its procedural twin through the "model" seam.
@@ -51,6 +52,14 @@ const ASTRONAUT_YAW_DEG := -12.0          # 0 faces down the dome, away from the
 const SlotButtons = preload("res://scripts/slot_buttons.gd")
 const CrewVoice = preload("res://scripts/crew_voice.gd")
 const ColonyUI = preload("res://scripts/colony_ui.gd")
+const Settlement = preload("res://scripts/settlement.gd")
+const Weather = preload("res://scripts/weather.gd")
+const SETTLEMENT_SCENE := "res://scenes/settlement.tscn"      # the overview of the domes and the sites for new ones (scripts/settlement_view.gd)
+const MAX_SITES := 8                                           # sites for domes on the overview: six, and two more beyond the airlocks once the air allows open-air farming
+const MAX_UNITS := 6                                           # domes the colony may build at first (core/colony.hpp: kMaxUnits is the station's four)
+const OPEN_AIR_UNITS := 2                                      # ... and this many more once the air has thickened enough to farm in the open
+const COL_AIR_TOP := Color(0.36, 0.55, 0.82)                   # the sky the plants make: blue overhead ...
+const COL_AIR_HORIZON := Color(0.78, 0.84, 0.88)               # ... pale at the horizon
 const TRAINING_SCENE := "res://scenes/training.tscn"      # the how-to-play training for new players (scripts/training.gd)
 
 var bay := FarmBay.new()
@@ -61,6 +70,9 @@ var hud_palette := {}                       # the HUD's accent, panel and text c
 var colony_ui: Control                     # the colony bar, the difficulty picker, the ending and the leaderboard (scripts/colony_ui.gd); none while the training hosts the game
 var ask_difficulty := DisplayServer.get_name() != "headless"      # open the difficulty picker with the scene; headless runs (the tests) start as a sandbox
 var colony_place := "dome"                    # how the ending texts name the place
+var unit_index := 0                        # which dome of the settlement this scene shows (the first, unless the overview sent the player to another)
+var colony_bay: FarmBay                    # the bay that holds the colony: the first dome's, whichever dome this scene shows
+var unit_noun := "dome"                    # what a unit is called here
 var colony_tuning := {"demand": [0.5, 0.6, 0.6], "reserve": [1.0, 1.6, 1.6]}                    # scales for what this bay can grow, by difficulty: {"demand": [...], "reserve": [...]}, 1.0 when absent
 # The dome grows less than the station (its potato takes about 150 days under the sun, and storms dim it): its colony asks for
 # 0.5 to 0.6 of the food of the station's, with a longer reserve on the two harder modes (see tests/test_colony.cpp).
@@ -70,8 +82,17 @@ var astronaut_recipe := {}                  # optional look of the crew member (
 var selected := Vector2i(-1, -1)          # (bed, slot), or (-1, -1)
 var crop_key := "potato"
 
-var tau := 0.5                             # the dust optical depth the bay is using now (0.5 = a clear day)
-var storm_active := false
+var _weather: Weather                      # the dust and the sun's power, shared by every dome of the settlement (scripts/weather.gd)
+var tau: float:                            # the dust optical depth the bay is using now (0.5 = a clear day)
+	get:
+		return _weather.tau
+	set(v):
+		_weather.tau = v
+var storm_active: bool:
+	get:
+		return _weather.storm_active
+	set(v):
+		_weather.storm_active = v
 
 var _tray_recipe := {}
 var _slot_offsets: PackedVector3Array
@@ -83,9 +104,18 @@ var _ring: MeshInstance3D
 var _refresh := 0.0
 var _species: Array = []
 
-var _rng := RandomNumberGenerator.new()
-var _next_storm_sol := 6
-var _storm := {"t": 0.0, "peak": 3.0, "rise": 24.0, "hold": 48.0, "fall": 60.0}
+var _next_storm_sol: int:                  # (the weather keeps the schedule; the tests move it)
+	get:
+		return _weather.next_storm_sol
+	set(v):
+		_weather.next_storm_sol = v
+var _storm: Dictionary:
+	get:
+		return _weather.storm
+	set(v):
+		_weather.storm = v
+var _ground_mat: StandardMaterial3D       # the plain: it greens as the air thickens
+var _air := 0.0                            # how far the colony's plants have thickened the air (0 to 1), refreshed a few times a second
 
 var _sun: DirectionalLight3D
 var _env: Environment
@@ -124,29 +154,48 @@ var _shade_slider: HSlider
 var _toast: Label
 var _toast_time := 0.0
 
+# A bay as this game's domes are: four beds of eight slots under the Martian sun, with a little LED light for the nights (the settlement
+# builds every dome after the first with this).
+static func make_bay() -> FarmBay:
+	var b := FarmBay.new()
+	for i in BED_CENTERS.size():
+		b.add_bed(BED_ROWS, BED_COLS, 0.72)
+	b.time_scale = 4.0
+	b.set_setting("sun_peak_ppfd", SUN_PEAK_PPFD)
+	b.set_setting("temp_c", 19.0)
+	b.set_setting("temp_swing_c", 6.0)
+	b.set_setting("light_on_hour", 18.0)
+	b.set_setting("light_off_hour", 0.0)          # LEDs from 18:00 to midnight: a supplement, not the main light
+	b.set_setting("power_budget_w", SOLAR_BUDGET_W)
+	b.set_setting("shade", 0.0)                   # screens open: closing them costs light, it never adds any
+	b.set_setting("tank_capacity_l", 120.0)
+	b.set_setting("tank_l", 80.0)
+	b.set_setting("tank_resupply_l_day", ICE_MELT_L_DAY)      # the dome melts ice from the regolith, so the reserve lasts as long as the settlement does
+	for i in BED_CENTERS.size():
+		b.set_bed_light_level(i, 0.5)
+	return b
+
 func _ready() -> void:
+	var st: Node = null if has_meta("training") else Settlement.peek()
+	bay.free()                                    # (the default one: this scene gets its own below, or a dome of the settlement)
+	if st != null and st.has_unit(st.current):    # a settlement is under way: this scene shows one of its domes
+		unit_index = st.current
+		bay = st.unit_bay(unit_index)
+		colony_bay = st.primary()
+		_weather = st.world as Weather
+	else:
+		bay = make_bay()
+		bay.name = "Bay"
+		add_child(bay)
+		colony_bay = bay
+		colony_bay.setup_settlement(MAX_UNITS, true, OPEN_AIR_UNITS)      # Mars is terraformed by its plants: the colony tracks the air (core/terraform.hpp)
+		_weather = Weather.new()
+	_weather.say = Callable(self, "_say")
+	_weather.attach(colony_bay)                   # storms are scheduled by the sols of the colony's own bay
+	_weather.apply(bay)
 	_species = bay.get_species_list()
-	bay.name = "Bay"
-	add_child(bay)
-	for i in BED_CENTERS.size():
-		bay.add_bed(BED_ROWS, BED_COLS, 0.72)
-	bay.time_scale = 4.0
-	bay.set_setting("sun_peak_ppfd", SUN_PEAK_PPFD)
-	bay.set_setting("temp_c", 19.0)
-	bay.set_setting("temp_swing_c", 6.0)
-	bay.set_setting("light_on_hour", 18.0)
-	bay.set_setting("light_off_hour", 0.0)        # LEDs from 18:00 to midnight: a supplement, not the main light
-	bay.set_setting("power_budget_w", SOLAR_BUDGET_W)
-	bay.set_setting("shade", 0.0)                 # screens open: closing them costs light, it never adds any
-	bay.set_setting("tank_capacity_l", 120.0)
-	bay.set_setting("tank_l", 80.0)
-	for i in BED_CENTERS.size():
-		bay.set_bed_light_level(i, 0.5)
-	_rng.seed = STORM_SEED
-	_next_storm_sol = _rng.randi_range(4, 8)
 	bay.plant_stage_changed.connect(_on_stage_changed)
 	bay.plant_died.connect(func(b, s): _say("A plant in bed %d died" % (b + 1)))
-	bay.day_changed.connect(_on_sol)
 
 	get_viewport().msaa_3d = Viewport.MSAA_4X       # the suit's plates and hoses have fine edges
 	_build_environment()
@@ -210,6 +259,7 @@ func _build_surface() -> void:
 	gm.albedo_texture = tex
 	gm.uv1_scale = Vector3(40, 40, 1)
 	gm.roughness = 1.0
+	_ground_mat = gm
 	plane.material = gm
 	ground.mesh = plane
 	ground.position = Vector3(0, -0.02, 0)
@@ -414,44 +464,23 @@ func _build_camera() -> void:
 # ---------------------------------------------------------------------------------------------------------
 
 func start_storm(peak: float, hold_hours: float) -> void:
-	_storm = {"t": 0.0, "peak": peak, "rise": 24.0, "hold": hold_hours, "fall": 60.0}
-	storm_active = true
-	_say("A dust storm is coming: peak optical depth %.1f" % peak)
+	_weather.start_storm(peak, hold_hours)
 
-func _on_sol(day: int) -> void:
-	if day >= _next_storm_sol and not storm_active:
-		start_storm(_rng.randf_range(2.5, 5.0), _rng.randf_range(24.0, 96.0))
-		_next_storm_sol = day + _rng.randi_range(8, 16)
+# With a settlement the weather moves with the settlement's clock (scripts/settlement.gd), whichever scene is on show.
+func _settlement_moves_the_weather() -> bool:
+	var st: Node = null if has_meta("training") else Settlement.peek()
+	return st != null and st.world == _weather
 
-# advance the storm by some game hours; sets the dust in the bay and, with it, the solar power
-func _advance_storm(game_hours: float) -> void:
-	if not storm_active:
-		return
-	_storm["t"] += game_hours
-	var t: float = _storm["t"]
-	var rise: float = _storm["rise"]
-	var hold: float = _storm["hold"]
-	var fall: float = _storm["fall"]
-	var peak: float = _storm["peak"]
-	if t < rise:
-		tau = lerpf(0.5, peak, t / rise)
-	elif t < rise + hold:
-		tau = peak
-	elif t < rise + hold + fall:
-		tau = lerpf(peak, 0.5, (t - rise - hold) / fall)
-	else:
-		tau = 0.5
-		storm_active = false
-		_say("The dust storm has passed")
-	bay.set_setting("dust_tau", tau)
-	bay.set_setting("power_budget_w", SOLAR_BUDGET_W * exp(-0.5 * maxf(0.0, tau - 0.5)))
-
-# step the whole world by game hours, one hour at a time (what the tests and the screenshot scripts use)
+# step the whole world by game hours, one hour at a time (what the tests and the screenshot scripts use): the weather and every dome
 func advance_world(game_hours: float) -> void:
+	var st: Node = null if has_meta("training") else Settlement.peek()
+	if st != null and st.world == _weather:
+		st.advance_all(game_hours)
+		return
 	var left := game_hours
 	while left > 1e-9:
 		var dt := minf(1.0, left)
-		_advance_storm(dt)
+		_weather.advance(dt, [bay])
 		bay.advance_hours(dt)
 		left -= dt
 
@@ -464,8 +493,8 @@ func _update_sky() -> void:
 	var trans := exp(-0.5 * maxf(0.0, tau - 0.5))
 	var storm_mix := clampf((tau - 0.5) / 3.0, 0.0, 1.0)
 	var day_light := clampf(elev * 3.0, 0.0, 1.0)
-	_sky.sky_top_color = COL_SKY_TOP.lerp(COL_STORM_TOP, storm_mix)
-	_sky.sky_horizon_color = COL_SKY_HORIZON.lerp(COL_STORM_HORIZON, storm_mix)
+	_sky.sky_top_color = COL_SKY_TOP.lerp(COL_STORM_TOP, storm_mix).lerp(COL_AIR_TOP, _air * 0.85)
+	_sky.sky_horizon_color = COL_SKY_HORIZON.lerp(COL_STORM_HORIZON, storm_mix).lerp(COL_AIR_HORIZON, _air * 0.7)
 	_sky.sky_energy_multiplier = 0.06 + 0.94 * day_light
 	_env.fog_light_color = _sky.sky_horizon_color
 	_env.fog_density = 0.0015 + 0.012 * storm_mix
@@ -477,8 +506,8 @@ func _update_sky() -> void:
 	_lamp.light_energy = 0.25 + 0.35 * (1.0 - day_light)
 
 func _process(delta: float) -> void:
-	if bay.time_scale > 0.0:
-		_advance_storm(minf(delta * bay.time_scale, 6.0))
+	if bay.time_scale > 0.0 and not _settlement_moves_the_weather():
+		_weather.advance(minf(delta * bay.time_scale, 6.0), [bay])
 	_refresh += delta
 	if _toast_time > 0.0:
 		_toast_time -= delta
@@ -538,7 +567,7 @@ func _build_hud() -> void:
 	root.add_child(left)
 	var lbox := _panel(left)
 	lbox.custom_minimum_size = Vector2(310, 0)
-	_label(lbox, "DOME GREENHOUSE 1", 16, COL_RUST)
+	_label(lbox, "DOME GREENHOUSE %d" % (unit_index + 1), 16, COL_RUST)
 	_status_label = _label(lbox, "")
 	_storm_label = _label(lbox, "", 13, Color(1.0, 0.75, 0.45))
 	_label(lbox, "Ice-melt reserve", 12, Color(0.85, 0.78, 0.7))
@@ -673,6 +702,10 @@ func _weather_notes() -> Array:
 func _refresh_hud() -> void:
 	if _status_label == null:
 		return
+	var air: Dictionary = colony_bay.get_terraform()
+	_air = float(air["progress"]) if bool(air["enabled"]) else 0.0
+	if _ground_mat != null:
+		_ground_mat.albedo_color = Color.WHITE.lerp(Color(0.66, 0.92, 0.55), smoothstep(0.3, 1.0, _air))     # the soil greens
 	var s := bay.get_status()
 	var hh := int(s["clock_h"])
 	var mm := int((s["clock_h"] - hh) * 60.0)
@@ -846,7 +879,20 @@ func action_remove() -> bool:
 	return ok
 
 func set_speed(hours_per_second: float) -> void:
-	bay.time_scale = hours_per_second
+	var st := Settlement.peek()
+	if st != null and not has_meta("training"):
+		st.set_speed(hours_per_second)                     # every dome keeps the same clock
+	else:
+		bay.time_scale = hours_per_second
+
+# The overview of the settlement: its domes, and the sites for new ones. The first visit hands this scene's bay and weather over.
+func open_settlement() -> void:
+	var st = Settlement.get_or_create(get_tree())
+	if st.units.is_empty():
+		st.adopt(bay, Callable(get_script(), "make_bay"), MAX_SITES)
+		st.world = _weather
+	st.current = unit_index
+	get_tree().change_scene_to_file(SETTLEMENT_SCENE)
 
 # ---------------------------------------------------------------------------------------------------------
 # visuals that follow the simulation

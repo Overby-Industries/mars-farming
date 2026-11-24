@@ -112,6 +112,36 @@ mode's multiplier, never below zero. The strategies above score about 3,500 for 
 **The leaderboard** (`scripts/leaderboard.gd`): the ten best runs for each mode, in `user://leaderboard.json` on this PC only; nothing is sent anywhere. An
 online board would need a server to send scores to, and `submit()` and `entries()` are all the game calls.
 
+## The settlement: more domes, and the air
+
+The colony's food buys it room, and the rules are in `core/colony.hpp` (all design values, pinned by `tests/test_colony.cpp`):
+
+| | |
+|---|---|
+| Housing | each dome houses `ceil(crew x 1.5)` people: 6, 12 or 18 |
+| Expansion offered | the store holds 30 days of food, the farm has grown at least 10 days of the crew's food, nobody is hungry, and a site is free (six, and two more once the air allows open-air farming) |
+| What building costs | 10 days of the crew's food. The new dome is a bay linked to the first (`Bay::link_colony`): what it harvests and the plants it loses count for the same colony, and the colony's clock and the air are the first bay's alone |
+| Arrivals | every 6 days of plenty: the store holds 40 days or more, the colony is at least 20 days old, and what the farm grew over the last 105 days (a growing season) is 1.5 times what the crew needed over them, and would still be counting the newcomers' appetite. As many as the housing allows, in batches of 2, 3 or 4 |
+| Score | 20 points a colonist who has arrived, 400 a dome built, 1,000 for establishing the colony, 5,000 for terraforming Mars |
+
+Why it is built like this. The first version let people arrive whenever the store was large, and the colony died of it: the reserve it starts with counts as plenty, so the
+crew grew until the food ran out. Counting only what the farm itself has grown, over a whole growing season, and only for as many people as that harvest would still have fed, keeps
+the calibrated strategies winning as they did, and building is how a colony wins what one dome cannot.
+
+**Terraforming** (`core/terraform.hpp`, the special mechanic of this game). Each hour the bays report the leaf area at work in the light (`StepResult::leaf_m2`, the canopy area times
+the plant's size times its light factor); the air index gains `0.0013` for each square metre of leaf, each day, and the thin air takes back `0.5%` of it each day, so with `L` m2 of leaf at
+work it settles at `0.26 x L`. The stages are 0.2, 0.5, 0.8 and 1.0. The numbers were set by playing strategies through a dome under the Martian sun (a scratch program run against the core): the mean leaf
+area of a dome over a long game is 0.53 m2 for lettuce, 0.55 for tomato and 0.71 for potato, so one dome settles it at 0.14 to 0.19; four domes at 0.56 to 0.75 (open-air farming), six at 0.83 to 1.13
+(only potato finishes it), eight at 1.11 to 1.5, which is why eight domes are the way to win comfortably, and why the two garden sites that open at 0.5 matter. The harvests come in waves, so the
+air wobbles about a threshold: a stage is announced once (`Terraform::best_stage()`), and the sites it opened stay open. An **established** colony (`Colony::set_continue_after_goal`) is one that
+reached its goal days and goes on: its success is banked, hunger no longer ends it, and the run ends when the air is breathable (`Outcome::Terraformed`) or the player says so.
+
+**The weather is shared** (`scripts/weather.gd`): one object holds the dust, the storm schedule and the solar power, and the settlement moves it with the clock whichever scene is on show, pushing the
+dust and the power onto every dome's bay. The dome scene keeps `tau`, `storm_active`, `start_storm()` and `advance_world()` as they were, forwarding to it.
+
+**The overview** (`scenes/settlement.tscn`, `scripts/settlement_view.gd` and the game's `scripts/settlement_look.gd`) draws the hub, the corridors, the sites, and a land that follows the air. `tests/settlement_test.gd` plays the
+overview through; `tests/terraform_test.gd` plays the whole game with a scripted player, to the ending.
+
 ## What does not exist yet
 
 Dust settling on the panels and the glass, equipment

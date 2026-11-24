@@ -187,6 +187,23 @@ void runBayTests() {
         CHECK_NEAR(dry.tank_l + dry.bed(0).water_l + dry.bed(1).water_l, w0 - dry.water_lost_l, 1e-9);
     }
 
+    // ---- ice melted for the tank (the Mars dome): it fills the tank, never past its capacity ------------
+    {
+        Bay bay = make_station();
+        bay.tank_l = 10.0;
+        bay.tank_capacity_l = 20.0;
+        bay.advance(24.0);
+        CHECK_NEAR(bay.tank_l, 10.0, 1e-12);                       // no resupply by default: the station has none
+        bay.settings.tank_resupply_l_day = 2.4;
+        bay.advance(24.0);
+        CHECK_NEAR(bay.tank_l, 12.4, 1e-9);
+        CHECK_NEAR(bay.water_added_l, 2.4, 1e-9);
+        bay.advance(24.0 * 10.0);
+        CHECK_NEAR(bay.tank_l, 20.0, 1e-9);                        // full is full
+        CHECK_NEAR(bay.water_added_l, 10.0, 1e-9);                 // and only what fitted was counted
+        check_invariants(bay);
+    }
+
     // ---- a whole lettuce bed, start to harvest -----------------------------------------------------------
     {
         Bay bay = make_station();

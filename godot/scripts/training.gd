@@ -18,6 +18,7 @@ extends Node
 ## Everything is driven by `tick(delta)` (called every frame), so the tests can play the training with the clock they want.
 
 const Driver = preload("res://scripts/training_driver.gd")
+const Settlement = preload("res://scripts/settlement.gd")
 
 signal step_changed(index: int, id: String)
 signal finished(start_game: bool)
@@ -87,6 +88,7 @@ var _b_keep: Button
 var _spacer: Control
 
 func _ready() -> void:
+	Settlement.reset()                       # the training is a game of its own: no units left over from another
 	var path := str(ProjectSettings.get_setting("application/run/main_scene"))
 	if path == scene_file_path:
 		push_error("The training hosts the project's main scene, so it cannot be the main scene itself.")

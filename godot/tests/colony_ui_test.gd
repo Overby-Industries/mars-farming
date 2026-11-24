@@ -164,13 +164,13 @@ func _run() -> void:
 	await process_frame
 	await process_frame
 	ui._refresh_bar()
-	check(ui._mode_label.text.begins_with("INTERMEDIATE") and ui._mode_label.text.contains("Crew 8") and ui._mode_label.text.contains("Day 1 / 200"), "the bar shows the mode, the crew and the day: %s" % ui._mode_label.text)
+	check(ui._mode_label.text.begins_with("INTERMEDIATE") and ui._mode_label.text.contains("Pop 8/12") and ui._mode_label.text.contains("Day 1 / 200"), "the bar shows the mode, the people and the day: %s" % ui._mode_label.text)
 	check(ui._food_box.visible and ui._score_label.visible and not ui._btn_new.visible, "and the food and the score")
 
 	# ---- the bar fits: on the screen, clear of the other panels and of every slot button ----
 	var bar: Rect2 = (ui._bar as Control).get_global_rect()
 	var view := Rect2(Vector2.ZERO, Vector2(1600, 900))
-	check(view.encloses(bar) and bar.size.y < 80.0, "the bar is on the screen and slim: %s" % str(bar))
+	check(view.encloses(bar) and bar.size.y < 110.0, "the bar is on the screen and slim: %s" % str(bar))
 	var overlapped := 0
 	for pc in scene.find_children("*", "PanelContainer", true, false):
 		var holder: Node = pc.get_parent()

@@ -57,6 +57,7 @@ struct Conditions {
 struct StepResult {
     double water_l = 0.0;    // litres the plant wanted this step
     double nutrient = 0.0;   // share of a bed reserve it used
+    double leaf_m2 = 0.0;    // canopy at work in the light this step (m2): what the plant gives the air
     bool stage_changed = false;
     Stage old_stage = Stage::Empty;
 };
@@ -121,6 +122,7 @@ inline StepResult step_plant(const Species& s, Plant& p, const Conditions& c, do
     const double size = 0.15 + 0.85 * p.progress;
     const double activity = lit ? 0.5 + 0.5 * std::min(1.0, c.ppfd / s.ppfd_opt) : 0.25;
     r.water_l = s.water_use * s.canopy_m2 * size * activity * dt_h / 24.0;
+    r.leaf_m2 = s.canopy_m2 * size * f_light;
 
     // Growth happens only in lit hours, and a sickly plant grows slower.
     if (lit && p.progress < 1.0) {

@@ -19,6 +19,7 @@
 
 #include "colony.hpp"
 #include "plant.hpp"
+#include "terraform.hpp"
 
 namespace aevoria::farm {
 
@@ -59,16 +60,17 @@ struct Settings {
     double shade = 0.0;               // 0 open, 1 closed
     // water
     double reclaim_fraction = 0.9;    // share of transpired water the dehumidifier returns to the tank
+    double tank_resupply_l_day = 0.0; // water brought into the tank a day: ice melted from the regolith (the Mars dome); 0 on the station
     bool auto_irrigate = false;
 };
 
-enum class EventType { StageChanged, PlantDied, DayChanged, ColonyOutcome };
+enum class EventType { StageChanged, PlantDied, DayChanged, ColonyOutcome, ColonyArrival, ColonyEstablished, TerraformStage };
 
 struct Event {
     EventType type = EventType::StageChanged;
     int bed = -1;
     int slot = -1;
-    int value = 0;  // the new Stage, the new day number, or the colony's Outcome
+    int value = 0;  // the new Stage, the new day number, the colony's Outcome, its new population, or the terraforming stage
 };
 
 class Bay {
@@ -86,10 +88,28 @@ public:
 
     // the colony this bay feeds (colony.hpp): not started until start_colony(), so a bare bay is a sandbox
     Colony colony;
+    // Mars only (terraform.hpp): the air the settlement's plants thicken. Off until setup_terraform().
+    Terraform terraform;
+
+    // A colony is fed by every greenhouse or dome (every Bay) of the settlement. The first bay holds it and keeps its time; the others
+    // are linked to it: what they harvest feeds it, the plants they lose count against it, and it is not advanced twice. The linked-to
+    // bay must outlive the linking one (the pointer is not owning), and neither may be copied once linked.
+    void link_colony(Bay& primary) {
+        linked_colony_ = (&primary == this) ? nullptr : &primary.colony;
+        linked_terraform_ = (&primary == this) ? nullptr : &primary.terraform;
+    }
+    void unlink_colony() {
+        linked_colony_ = nullptr;
+        linked_terraform_ = nullptr;
+    }
+    bool colony_linked() const { return linked_colony_ != nullptr; }
+    Colony& active_colony() { return linked_colony_ != nullptr ? *linked_colony_ : colony; }
+    Terraform& active_terraform() { return linked_terraform_ != nullptr ? *linked_terraform_ : terraform; }
 
     // running totals
     double energy_wh = 0.0;
     double water_lost_l = 0.0;        // transpired water the dehumidifier did not recover
+    double water_added_l = 0.0;       // water the resupply has put in the tank
     double harvested_kg = 0.0;
     std::vector<double> harvested_by_species = std::vector<double>(kSpecies.size(), 0.0);
 
@@ -119,8 +139,28 @@ public:
     // Start the colony the bay feeds, on a difficulty (a full reserve, no hunger, the score at zero). `demand_scale` and
     // `reserve_scale` shrink or stretch what the colony asks of the bay and the reserve it starts with, for a bay that
     // grows less or more, or more slowly.
-    void start_colony(Difficulty d, double demand_scale = 1.0, double reserve_scale = 1.0) { colony.start(d, demand_scale, reserve_scale); }
-    void stop_colony() { colony.stop(); }
+    void start_colony(Difficulty d, double demand_scale = 1.0, double reserve_scale = 1.0) {
+        colony.start(d, demand_scale, reserve_scale);
+        colony.set_max_units(max_units_);
+        colony.set_continue_after_goal(terraform_enabled_);
+        terraform = Terraform{};
+        terraform.enable(terraform_enabled_);
+    }
+    void stop_colony() {
+        colony.stop();
+        terraform = Terraform{};
+        terraform.enable(terraform_enabled_);
+    }
+    // How many domes or greenhouses the settlement may have (4 unless a game says otherwise), and whether this game terraforms: then
+    // the colony is only established at its goal and goes on, and `open_air_bonus` more sites open when the air is thick enough to farm in.
+    void setup_settlement(int max_units, bool terraforming, int open_air_bonus) {
+        max_units_ = max_units;
+        terraform_enabled_ = terraforming;
+        open_air_bonus_ = open_air_bonus;
+        colony.set_max_units(max_units);
+        colony.set_continue_after_goal(terraforming);
+        terraform.enable(terraforming);
+    }
 
 
     // Sow a seed in an empty slot. Returns false for a bad slot, an unknown species or an occupied slot.
@@ -147,7 +187,7 @@ public:
             harvested_kg += h->kg;
             harvested_by_species[static_cast<std::size_t>(h->species)] += h->kg;
             nutrient_stock += h->kg * kCompostUnitsPerKg;
-            colony.add_harvest(h->species, h->kg);
+            active_colony().add_harvest(h->species, h->kg);
         }
         return h;
     }
@@ -243,6 +283,11 @@ private:
     std::vector<Bed> beds_;
     std::vector<Event> events_;
     std::mt19937_64 rng_;
+    Colony* linked_colony_ = nullptr;   // the colony of the bay this one is linked to, or null
+    Terraform* linked_terraform_ = nullptr;
+    int max_units_ = kMaxUnits;
+    bool terraform_enabled_ = false;
+    int open_air_bonus_ = 0;
 
     // A uniform number in [0, 1) that is identical on every compiler (the std distributions are not).
     double u01() { return static_cast<double>(rng_() >> 11) * (1.0 / 9007199254740992.0); }
@@ -265,6 +310,7 @@ private:
         const double demand_w = power_demand_at(settings, beds_, mid);
         energy_wh += std::min(demand_w, settings.power_budget_w) * dt;
 
+        double leaf_m2h = 0.0;
         for (int bi = 0; bi < bed_count(); ++bi) {
             Bed& b = bed(bi);
             Conditions c;
@@ -281,8 +327,9 @@ private:
                 const StepResult r = step_plant(*s, p, c, dt);
                 water_wanted += r.water_l;
                 nutrient_used += r.nutrient;
+                leaf_m2h += r.leaf_m2 * dt;
                 if (r.stage_changed) {
-                    if (p.stage == Stage::Dead) colony.note_plant_lost();
+                    if (p.stage == Stage::Dead) active_colony().note_plant_lost();
                     events_.push_back({p.stage == Stage::Dead ? EventType::PlantDied : EventType::StageChanged, bi, slot,
                                        static_cast<int>(p.stage)});
                 }
@@ -299,8 +346,28 @@ private:
             if (settings.auto_irrigate && b.moisture() < 0.4) irrigate(bi, 0.9 * b.water_capacity_l - b.water_l);
         }
 
-        const Outcome decided = colony.advance(dt);
-        if (decided != Outcome::Running) events_.push_back({EventType::ColonyOutcome, -1, -1, static_cast<int>(decided)});
+        if (settings.tank_resupply_l_day > 0.0) {           // ice melted for the tank, up to what it holds
+            const double added = std::clamp(settings.tank_resupply_l_day * dt / 24.0, 0.0, std::max(0.0, tank_capacity_l - tank_l));
+            tank_l += added;
+            water_added_l += added;
+        }
+
+        active_terraform().add_leaf_hours(leaf_m2h);
+        if (linked_colony_ == nullptr) {      // a linked bay leaves the colony's (and the air's) clock to the bay that holds it
+            Outcome decided = colony.advance(dt);
+            if (decided != Outcome::Running) events_.push_back({EventType::ColonyOutcome, -1, -1, static_cast<int>(decided)});
+            if (colony.take_arrivals() > 0) events_.push_back({EventType::ColonyArrival, -1, -1, colony.population()});
+            if (colony.take_established()) events_.push_back({EventType::ColonyEstablished, -1, -1, 0});
+            if (terraform.enabled()) {
+                const int stage = terraform.advance(dt);
+                colony.set_max_units(max_units_ + (terraform.best_stage() >= 2 ? open_air_bonus_ : 0));   // open-air farming opens more sites, for good
+                if (stage > 0) events_.push_back({EventType::TerraformStage, -1, -1, stage});
+                if (terraform.complete() && colony.running()) {
+                    decided = colony.finish_terraformed();
+                    events_.push_back({EventType::ColonyOutcome, -1, -1, static_cast<int>(decided)});
+                }
+            }
+        }
 
         clock_h += dt;
         if (clock_h >= 24.0) {

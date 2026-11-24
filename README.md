@@ -6,9 +6,10 @@ and cut the solar power that feeds the lights. Built in Godot 4.6.3 with a C++ G
 code-generated graphics style as [Aevoria Simulator](https://github.com/Overby-Industries/aevoria-simulator) and
 its sibling [Aevoria Space Station Farming](https://github.com/Overby-Industries/aevoria-space-station-farming).
 
-**Status: an early start.** One dome, four crops (potato is the staple), a growth model with tests, procedural
+**Status: an early start.** A dome that grows into a settlement of up to eight, four crops (potato is the staple), a growth model with tests, procedural
 plants, Blender-modelled props, dust storms, a playable dome scene with a floating button over every crop, a crew astronaut
-built from modular suit components who talks you through the farm, a short training for new players, and a colony to feed on three difficulties, with a score and a leaderboard. Not a finished game.
+built from modular suit components who talks you through the farm, a short training for new players, a colony to feed on three difficulties that grows with the food, with a score and a leaderboard, and
+the plants' own oxygen to terraform Mars with. Not a finished game.
 See [docs/DESIGN.md](docs/DESIGN.md) for what exists and what does not.
 
 ![The dome at noon: a floating button over every slot says Harvest, Water, Clear or how far the plant has grown, and the crew astronaut on the walkway describes the plant that is selected](docs/dome.jpg)
@@ -17,9 +18,9 @@ See [docs/DESIGN.md](docs/DESIGN.md) for what exists and what does not.
 
 | Path | What it is |
 |---|---|
-| `core/` | The farm simulation in plain C++17, header-only, no Godot types: `species.hpp` (the crops), `plant.hpp` (growth, stress, harvest), `bay.hpp` (beds, lights, sun, dust, water, nutrients, clock), `colony.hpp` (the colony: food, hunger, the three difficulties, the score) |
+| `core/` | The farm simulation in plain C++17, header-only, no Godot types: `species.hpp` (the crops), `plant.hpp` (growth, stress, harvest), `bay.hpp` (beds, lights, sun, dust, water, nutrients, clock), `colony.hpp` (the colony: food, hunger, the three difficulties, the score, the people and the room to grow), `terraform.hpp` (the air the plants make) |
 | `src/` | The GDExtension: `FarmBay` (the simulation as a node), `FarmShapeBuilder` (recipe to 3D shape), `FarmSkinGenerator` (recipe to texture), plus the mesh and plant geometry code |
-| `godot/` | The Godot project: `scenes/dome.tscn` (the game slice), `scenes/training.tscn` (the training for new players), `scenes/showcase.tscn` (every crop at every stage), `scripts/` (including `slot_buttons.gd`, the floating buttons over the slots, `crew_voice.gd`, the crew member's voice, `training.gd`, the coach, `colony_ui.gd` and `leaderboard.gd`, the colony screens, and `astronaut.gd`, which assembles the crew member), `models/` (the Blender props as `.glb`, and the astronaut's eleven suit components in `models/astronaut/`), `tests/` |
+| `godot/` | The Godot project: `scenes/dome.tscn` (the game slice), `scenes/training.tscn` (the training for new players), `scenes/showcase.tscn` (every crop at every stage), `scripts/` (including `slot_buttons.gd`, the floating buttons over the slots, `crew_voice.gd`, the crew member's voice, `training.gd`, the coach, `colony_ui.gd` and `leaderboard.gd`, the colony screens, `settlement.gd`, `settlement_view.gd` and `settlement_look.gd`, the domes and the overview where new ones are built, `weather.gd`, the dust the domes share, and `astronaut.gd`, which assembles the crew member), `models/` (the Blender props as `.glb`, and the astronaut's eleven suit components in `models/astronaut/`), `tests/` |
 | `blender/` | `build_assets.py` builds the props in `godot/models/` from code; `build_astronaut.py` builds the suit's components in `godot/models/astronaut/` |
 | `tests/` | The C++ test suite for `core/` (CMake) |
 | `docs/` | [DESIGN.md](docs/DESIGN.md) and [GRAPHICS_GUIDE.md](docs/GRAPHICS_GUIDE.md) |
@@ -96,6 +97,48 @@ after an ending, and *Sandbox* in the picker skips the colony altogether. The ma
 
 ![A colony kept fed for 120 days: the ending, the score by its parts, and a name for the leaderboard](docs/ending.jpg)
 
+## More domes, and a new sky
+
+![The settlement from above: two domes joined to the hub by corridors, free sites glowing where the next may be built, and two locked sites beyond for gardens in the open](docs/settlement.jpg)
+
+A colony that is fed well can grow. The **Settlement** button on the colony bar (it turns amber and says *BUILD* when the colony has food to spare)
+opens the settlement seen from above: the hub, a corridor to each of six sites, and a dome on every site that has been built. Click a dome to see how it is doing
+and press **Enter** to farm in it; click a free site and press **Build** to put a new dome there. Every dome is a bay of its own, with four beds, its own water, nutrients,
+LEDs and shade screens, but they run on one clock, **share one sky** (a dust storm dims every dome and cuts the power of every array) and feed one crew: whatever any of them
+harvests goes into the colony's store. Each dome melts a little ice into its reserve (0.6 L a day), so a settlement can outlast its first tank.
+
+The food decides how the settlement grows (`core/colony.hpp`; every number is a design value):
+
+| | |
+|---|---|
+| **Expansion** | A new dome may be built once the store holds 30 days of food and the farm has grown at least ten days' worth of what the crew eats. Building costs ten days of the crew's food. Six sites at first. |
+| **Housing** | A dome houses one and a half crews: 6, 12 or 18 people, by mode. |
+| **Growth** | When the farm has grown half as much again as the crew needs over the last growing season (105 days, about as long as the slowest crop takes), with 40 days of food in store, and would still have done so counting the newcomers' appetite, more people arrive every six days, in batches of 2, 3 or 4, up to what the domes house. |
+| **Score** | 20 points for each person who arrives and 400 for each dome built. |
+
+A colony that only just feeds itself never grows, so the three modes are as hard as they were unless you choose to expand, and expanding is how a hard mode is won
+with simple farming (`tests/test_colony.cpp` plays both).
+
+### The special mechanic: terraforming Mars
+
+![Mars when its plants have done their work: a blue sky, green fields, trees and a lake round the domes (the picture is drawn with the air set to 100% for the purpose)](docs/terraform.jpg)
+
+Mars is a dead world, and the best way to win is to bring it back to life. Every leaf at work in the light, in every dome, breathes out oxygen, and the air of Mars gets a little
+thicker every day; the thin air gives half a percent of it back to space each day, so it settles where the two meet, and that depends on how much plant there is. The bar
+along the top and the overview show the **air** from 0 to 100%, and the land follows it:
+
+| Air | What it means |
+|---|---|
+| 20% | **The air is thickening.** The sky starts to turn from butterscotch to blue |
+| 50% | **Open-air farming.** Two more sites open beyond the airlocks, for gardens in the open (eight in all), and green fields spread over the plain |
+| 80% | **Breathable with a mask.** Trees appear |
+| 100% | **Mars is terraformed.** The colonists take off their masks, a lake fills, and the run ends in the best way there is: 5,000 points and *MARS IS TERRAFORMED* |
+
+Reaching the goal days (120, 200 or 300) now *establishes* the colony instead of ending the run: the 1,000 points are banked, and an established colony can no longer be starved
+out (a hungry day still costs points). A panel offers **Keep going: terraform Mars** or **Finish the run here**. A dome of good potato puts about 0.7 square metres of leaf to work on
+average (lettuce 0.5), so one dome settles the air at 14 to 19%: one dome never gets far, four reach open-air farming (56 to 75%), six well-run domes only just finish the job (83 to 113%), and eight finish it
+with room to spare (111 to 150%). A scripted player in `tests/terraform_test.gd` farms lettuce and potato, builds a dome whenever it may and keeps 70 days of food, and terraforms Mars on day 425 with all eight.
+
 ## Training for new players
 
 ![The training: the coach panel over the real game, with a ring on the Water button of the bed that has run dry](docs/training.jpg)
@@ -142,6 +185,8 @@ godot --headless --path godot -s res://tests/dome_test.gd
 godot --headless --path godot -s res://tests/crew_ui_test.gd
 godot --headless --path godot -s res://tests/training_test.gd
 godot --headless --path godot -s res://tests/colony_ui_test.gd
+godot --headless --path godot -s res://tests/settlement_test.gd
+godot --headless --path godot -s res://tests/terraform_test.gd
 ```
 
 On a fresh checkout the first `--import` can exit with a crash code (on Windows with Godot 4.6.3 it does, from
@@ -154,7 +199,7 @@ top is `shot_growth.gd -- dome.jpg 45 noon default 11` (a name ending in `.jpg` 
 the beds). `shot_astronaut.gd` photographs the suit on a bare stage (`shot_astronaut.gd -- astronaut.jpg 0 front,back,three_quarter`), and
 `shot_training.gd` photographs the training at one moment (the picture of the training is `shot_training.gd -- training.jpg dry`; the
 others are `welcome`, `sow`, `sow2`, `grow`, `harvest`, `select`, `ask`, `finish` and `watch`), and `shot_colony.gd` photographs the colony screens (`shot_colony.gd -- difficulty.jpg picker`; the others are `bar`,
-`ending`, `success` and `board`).
+`ending`, `success` and `board`), and `shot_settlement.gd` photographs the overview (`shot_settlement.gd -- settlement.jpg built site=3`; the moments are `fresh`, `ready`, `select`, `built` and `full`, and `air=0.65` draws the land as it looks with the air at 65%: the picture of the terraformed land is `-- terraform.jpg full air=1.0 dist=118 pitch=-0.3 yaw=0.55`).
 
 ## Release to itch.io
 
@@ -175,7 +220,7 @@ Tune them by playing. The same goes for what the colony asks of the bay, its res
 
 ## Roadmap
 
-Dust on the solar panels and on the dome, equipment faults and events, a better storm model, crops chosen for Mars, a save file,
+Seasons and a real sol, dust on the solar panels and on the dome, equipment faults and events, a better storm model, crops chosen for Mars, a save file,
 sound effects and music, an online leaderboard, and tuning.
 
 ## License

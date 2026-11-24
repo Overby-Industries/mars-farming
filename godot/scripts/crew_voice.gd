@@ -39,6 +39,7 @@ const READ_CPS := 15.0     # characters per second a line is given to be spoken,
 var enabled := true        # off: it says and shows nothing
 var spontaneous := true    # off: it speaks only when spoken to (a selection, Ask crew) or told to (say()); the training scene uses this
 var describe_selection := true      # off: selecting a slot is not described (the training scene holds it back until its Select lesson)
+var follow_plants := true           # off: it does not follow the plants of the scene's bay (the settlement view has no beds to point at); set before setup()
 var audio := true          # spoken aloud (text-to-speech); off leaves the captions
 var volume := 80           # 0 to 100
 var pitch := 0.95
@@ -77,8 +78,9 @@ func setup(p_scene: Node, p_astronaut: Node3D, hud_root: Control, palette := {})
 	name = "CrewVoice"
 	for sp in scene.bay.get_species_list():
 		_species_by_key[sp["key"]] = sp
-	scene.bay.plant_stage_changed.connect(_on_stage)
-	scene.bay.plant_died.connect(_on_died)
+	if follow_plants:
+		scene.bay.plant_stage_changed.connect(_on_stage)
+		scene.bay.plant_died.connect(_on_died)
 	_tts = DisplayServer.has_feature(DisplayServer.FEATURE_TEXT_TO_SPEECH) and DisplayServer.tts_get_voices().size() > 0
 	if _tts:
 		var english := DisplayServer.tts_get_voices_for_language("en")

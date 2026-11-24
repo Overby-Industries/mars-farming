@@ -16,6 +16,7 @@ extends Control
 
 const Leaderboard = preload("res://scripts/leaderboard.gd")
 const Prefs = preload("res://scripts/prefs.gd")
+const Settlement = preload("res://scripts/settlement.gd")
 
 signal colony_started(difficulty: int)
 signal colony_ended(outcome: int)
@@ -55,6 +56,10 @@ var _score_label: Label
 var _btn_new: Button
 var _btn_voice: Button
 var _btn_board: Button
+var _btn_settle: Button
+var _air_label: Label
+var _pop_seen := 0
+var _expansion_seen := false
 var _picker: Control
 var _picker_voice_row: HBoxContainer
 var _ending: Control
@@ -79,14 +84,33 @@ func setup(p_scene: Node, p_palette: Dictionary, ask: bool) -> void:
 	restart = func(): scene.get_tree().reload_current_scene()
 	open_training = func(): scene.get_tree().change_scene_to_file(str(scene.get("TRAINING_SCENE")))
 	_build_bar()
-	scene.bay.colony_outcome.connect(_on_outcome)
+	var cb := _cb()
+	cb.colony_outcome.connect(_on_outcome)
+	cb.colony_arrival.connect(_on_arrival)
+	cb.colony_established.connect(_on_established)
+	cb.terraform_stage.connect(_on_terraform_stage)
 	_refresh_bar()
 	if Engine.has_meta("colony_start"):                            # "Play again" reloaded the scene on purpose
 		var next := int(Engine.get_meta("colony_start"))
 		Engine.remove_meta("colony_start")
 		choose(next, false)
-	elif ask:
+	elif ask and not bool(cb.get_colony()["started"]):
 		show_picker()
+	var c0: Dictionary = cb.get_colony()
+	if bool(c0["started"]) and phase != "picker":                  # back from the settlement view or another unit: the game goes on
+		difficulty = int(c0["difficulty"])
+		phase = "playing" if bool(c0["running"]) else "sandbox"
+
+# The bay that holds the colony: the first unit's, whichever unit the scene shows.
+func _cb() -> Node:
+	var b = scene.get("colony_bay")
+	if b != null and is_instance_valid(b):
+		return b
+	var own = scene.get("bay")
+	return own if own != null and is_instance_valid(own) else null         # (none: a new game has just cleared the settlement)
+
+func _unit_noun() -> String:
+	return str(scene.get("unit_noun")) if scene.get("unit_noun") != null else "greenhouse"
 
 func _process(delta: float) -> void:
 	_t += delta
@@ -185,9 +209,12 @@ func _build_bar() -> void:
 	var panel := PanelContainer.new()
 	panel.add_theme_stylebox_override("panel", _frame_style(8))
 	_bar.add_child(panel)
+	var rows := VBoxContainer.new()
+	rows.add_theme_constant_override("separation", 6)
+	panel.add_child(rows)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 12)
-	panel.add_child(row)
+	rows.add_child(row)
 	_mode_label = _label("", 14, _accent)
 	row.add_child(_mode_label)
 	_food_box = HBoxContainer.new()
@@ -210,19 +237,30 @@ func _build_bar() -> void:
 	_food_value = _label("", 13)
 	_food_box.add_child(_food_value)
 	row.add_child(_food_box)
+	_air_label = _label("", 14, Color("9fd7ff"))
+	row.add_child(_air_label)
 	_score_label = _label("", 14)
 	row.add_child(_score_label)
+	var buttons := HBoxContainer.new()
+	buttons.add_theme_constant_override("separation", 6)
+	buttons.alignment = BoxContainer.ALIGNMENT_CENTER
+	rows.add_child(buttons)
+	_btn_settle = _button("Settlement", _open_settlement)
+	buttons.add_child(_btn_settle)
 	_btn_new = _button("New colony", show_picker)
-	row.add_child(_btn_new)
+	buttons.add_child(_btn_new)
 	_btn_voice = _button("", toggle_voice)
-	row.add_child(_btn_voice)
+	buttons.add_child(_btn_voice)
 	_btn_board = _button("Leaderboard", func(): show_board())
-	row.add_child(_btn_board)
+	buttons.add_child(_btn_board)
 
 func _refresh_bar() -> void:
 	if scene == null or _bar == null:
 		return
-	var c: Dictionary = scene.bay.get_colony()
+	var cbay := _cb()
+	if cbay == null:
+		return
+	var c: Dictionary = cbay.get_colony()
 	var started: bool = c["started"]
 	var running: bool = c["running"]
 	_bar.visible = phase != "picker"                      # the picker has the screen to itself
@@ -232,16 +270,48 @@ func _refresh_bar() -> void:
 	if not started:
 		_mode_label.text = "SANDBOX  ·  no colony to feed"
 	elif running:
-		_mode_label.text = "%s  ·  Crew %d  ·  Day %d / %d" % [str(c["difficulty_name"]).to_upper(), c["crew"], int(c["day"]) + 1, int(c["goal_days"])]
+		var units_text := "" if int(c["units"]) < 2 else "  ·  %d %ss" % [int(c["units"]), _unit_noun()]
+		var day_text := ("Day %d  ·  established" % (int(c["day"]) + 1)) if bool(c["established"]) else ("Day %d / %d" % [int(c["day"]) + 1, int(c["goal_days"])])
+		_mode_label.text = "%s  ·  Pop %d/%d%s  ·  %s" % [str(c["difficulty_name"]).to_upper(), c["population"], c["housing"], units_text, day_text]
 		var reserve: float = c["reserve_days"]
 		_food_bar.value = reserve
 		_food_value.text = "%d days" % int(ceilf(reserve)) if not c["starving"] else "EMPTY: %d of %d days" % [int(c["hunger_days"]) + 1, int(c["grace_days"])]
 		_food_fill.bg_color = Color("c4472f") if c["starving"] or reserve < 7.0 else (Color("e8a33d") if reserve < WARN_DAYS else Color("7bd35a"))
 	else:
 		_mode_label.text = "%s  ·  %s" % [str(c["difficulty_name"]).to_upper(), _outcome_short(int(c["outcome"]))]
+	var air: Dictionary = cbay.get_terraform()
+	_air_label.visible = bool(air["enabled"]) and started
+	if _air_label.visible:
+		_air_label.text = "Air %d%%" % roundi(float(air["progress"]) * 100.0)
 	if started:
 		_score_label.text = "Score %s" % _n(float(c["score"]))
+		_pop_seen = int(c["population"])
+		var ready: bool = bool(c["expansion_ready"])
+		if ready and not _expansion_seen and scene.has_method("open_settlement"):
+			_say("We have food to spare. Open the settlement view to build a new %s." % _unit_noun(), "colony_expand")
+		_expansion_seen = ready
+	_refresh_settle_button(c)
 	_refresh_voice_button()
+
+# The way to the settlement view from a farm, and back to the farm from the view.
+func _refresh_settle_button(c: Dictionary) -> void:
+	var to_overview := scene.has_method("open_settlement")
+	var to_farm := scene.has_method("open_farm")
+	_btn_settle.visible = (to_overview or to_farm) and not scene.has_meta("training")
+	if not _btn_settle.visible:
+		return
+	if to_farm:
+		_btn_settle.text = "Back to the farm"
+		return
+	var ready: bool = bool(c["started"]) and bool(c["expansion_ready"])
+	_btn_settle.text = "Settlement: BUILD" if ready else ("Settlement (%d)" % int(c["units"]) if bool(c["started"]) else "Settlement")
+	_btn_settle.modulate = Color("ffd27a") if ready else Color.WHITE
+
+func _open_settlement() -> void:
+	if scene.has_method("open_settlement"):
+		scene.open_settlement()
+	elif scene.has_method("open_farm"):
+		scene.open_farm()
 
 func _outcome_short(outcome: int) -> String:
 	match outcome:
@@ -249,6 +319,7 @@ func _outcome_short(outcome: int) -> String:
 		FarmBay.OUTCOME_EVACUATED: return "evacuated"
 		FarmBay.OUTCOME_EVACUATED_WITH_LOSSES: return "partial evacuation"
 		FarmBay.OUTCOME_EXTINCT: return "extinct"
+		FarmBay.OUTCOME_TERRAFORMED: return "Mars terraformed"
 	return ""
 
 # ---------------------------------------------------------------------------------------------------------
@@ -366,13 +437,20 @@ func _refresh_picker_voice() -> void:
 # Start a colony on a difficulty (0 Easy, 1 Intermediate, 2 Difficult): the picker closes and the clock runs.
 func choose(d: int, announce := true) -> void:
 	d = clampi(d, 0, 2)
+	var st := Settlement.peek()
+	var unit_here: int = int(scene.get("unit_index")) if scene.get("unit_index") != null else 0
+	if st != null and (st.units.size() > 1 or unit_here > 0):      # a new colony means a new settlement: start the game again
+		Settlement.reset()
+		Engine.set_meta("colony_start", d)
+		restart.call()
+		return
 	difficulty = d
 	var tuning: Dictionary = {}
 	if scene.get("colony_tuning") != null:
 		tuning = scene.colony_tuning
 	var demand: Array = tuning.get("demand", [1.0, 1.0, 1.0])
 	var reserve: Array = tuning.get("reserve", [1.0, 1.0, 1.0])
-	scene.bay.start_colony(d, float(demand[d]), float(reserve[d]))
+	_cb().start_colony(d, float(demand[d]), float(reserve[d]))
 	Prefs.write("colony", "difficulty", d)
 	if _picker != null:
 		_picker.visible = false
@@ -393,7 +471,7 @@ func choose(d: int, announce := true) -> void:
 
 # No colony: just farm, as the game did before it had one.
 func choose_sandbox() -> void:
-	scene.bay.stop_colony()
+	_cb().stop_colony()
 	difficulty = -1
 	if _picker != null:
 		_picker.visible = false
@@ -406,7 +484,8 @@ func choose_sandbox() -> void:
 # ---------------------------------------------------------------------------------------------------------
 
 func _on_outcome(outcome: int) -> void:
-	result = scene.bay.get_colony().duplicate(true)
+	result = _cb().get_colony().duplicate(true)
+	result["terraform"] = _cb().get_terraform()
 	scene.set_speed(0.0)
 	phase = "ending"
 	saved = false
@@ -419,14 +498,16 @@ func _place() -> String:
 	return str(scene.get("colony_place")) if scene.get("colony_place") != null else "station"
 
 func _fill(text: String) -> String:
-	return text.format({"place": _place(), "crew": result.get("crew", 0), "survivors": result.get("survivors", 0),
-			"lost": int(result.get("crew", 0)) - int(result.get("survivors", 0)), "goal": int(result.get("goal_days", 0)), "day": int(result.get("day", 0.0))})
+	var people: int = int(result.get("population", result.get("crew", 0)))
+	return text.format({"place": _place(), "crew": people, "survivors": result.get("survivors", 0), "lost": people - int(result.get("survivors", 0)),
+			"goal": int(result.get("goal_days", 0)), "day": int(result.get("day", 0.0)), "units": int(result.get("units", 1)), "unit": _unit_noun()})
 
 func _title_text() -> String:
 	match int(result.get("outcome", 0)):
 		FarmBay.OUTCOME_SUCCESS: return "COLONY ESTABLISHED"
 		FarmBay.OUTCOME_EVACUATED: return "EVACUATED: THE COLONY HAS FAILED"
 		FarmBay.OUTCOME_EVACUATED_WITH_LOSSES: return "PARTIAL EVACUATION: THE COLONY HAS FAILED"
+		FarmBay.OUTCOME_TERRAFORMED: return "MARS IS TERRAFORMED"
 	return "EXTINCTION"
 
 func _story_text() -> String:
@@ -437,6 +518,8 @@ func _story_text() -> String:
 			return _fill("The food ran out on day {day}. Earth is safe, so mission control ordered the {place} evacuated and all {crew} colonists were brought home. They are alive, but the colony has failed.")
 		FarmBay.OUTCOME_EVACUATED_WITH_LOSSES:
 			return _fill("The food ran out on day {day}. Earth is damaged and could take back only {survivors} of the {crew} colonists. The other {lost} were left behind. The colony has failed.")
+		FarmBay.OUTCOME_TERRAFORMED:
+			return _fill("The plants of {units} {unit}s breathed out enough oxygen to thicken the air of Mars. Outside, the sky is turning blue, crops grow in the open, and the {crew} colonists have taken off their masks. The {unit}s are no longer needed to live here.")
 	return _fill("The food ran out on day {day}. Earth can no longer be lived on, so there was nowhere to go. None of the {crew} colonists survived. The colony is extinct.")
 
 func _voice_line() -> String:
@@ -444,6 +527,7 @@ func _voice_line() -> String:
 		FarmBay.OUTCOME_SUCCESS: return _fill("The colony is established. The farm kept all {crew} of us fed for {goal} days.")
 		FarmBay.OUTCOME_EVACUATED: return _fill("The food has run out. We are being evacuated home. The colony has failed.")
 		FarmBay.OUTCOME_EVACUATED_WITH_LOSSES: return _fill("The food has run out. Earth can take only {survivors} of us home. The colony has failed.")
+		FarmBay.OUTCOME_TERRAFORMED: return "The air is breathable. Mars is terraformed. We did it."
 	return "The food has run out, and there is nowhere to go. The colony is extinct."
 
 func _show_ending() -> void:
@@ -452,10 +536,11 @@ func _show_ending() -> void:
 		_ending = made[0]
 		_ending_box = made[1]
 	_clear(_ending_box)
-	var success: bool = int(result.get("outcome", 0)) == FarmBay.OUTCOME_SUCCESS
+	var success: bool = [FarmBay.OUTCOME_SUCCESS, FarmBay.OUTCOME_TERRAFORMED].has(int(result.get("outcome", 0)))
 	_ending_box.add_child(_label(_title_text(), 22, Color("8fd68a") if success else Color("e07a5f")))
 	_ending_box.add_child(_label(_story_text(), 15, _text_col, true))
-	var facts := "%s  ·  Survivors %d of %d  ·  Day %d" % [str(result.get("difficulty_name", "")), int(result.get("survivors", 0)), int(result.get("crew", 0)), int(result.get("day", 0.0))]
+	var facts := "%s  ·  Survivors %d of %d  ·  %d %s%s  ·  Day %d" % [str(result.get("difficulty_name", "")), int(result.get("survivors", 0)), int(result.get("population", result.get("crew", 0))),
+			int(result.get("units", 1)), _unit_noun(), "" if int(result.get("units", 1)) == 1 else "s", int(result.get("day", 0.0))]
 	_ending_box.add_child(_label(facts, 13, _muted))
 	var parts: Dictionary = result.get("score_parts", {})
 	var grid := GridContainer.new()
@@ -467,10 +552,12 @@ func _show_ending() -> void:
 		["Days lasted (%d)" % int(result.get("day", 0.0)), parts.get("days", 0.0), 1],
 		["Food grown (%d kcal)" % int(result.get("harvested_kcal", 0.0)), parts.get("food", 0.0), 1],
 		["Crops grown (%d of 4)" % int(result.get("crops_grown", 0)), parts.get("variety", 0.0), 1],
+		["Colonists arrived (%d)" % int(result.get("arrivals_total", 0)), parts.get("growth", 0.0), 1],
+		["%ss built (%d)" % [_unit_noun().capitalize(), int(result.get("units", 1)) - 1], parts.get("expansion", 0.0), 1],
 		["Food left in store (%d days)" % int(result.get("reserve_days", 0.0)), parts.get("reserve", 0.0), 1],
 		["Plants lost (%d)" % int(result.get("plants_lost", 0)), parts.get("lost", 0.0), -1],
 		["Hungry days (%.1f)" % float(result.get("hungry_days_total", 0.0)), parts.get("hunger", 0.0), -1],
-		["Colony established", parts.get("bonus", 0.0), 1],
+		["Mars terraformed" if int(result.get("outcome", 0)) == FarmBay.OUTCOME_TERRAFORMED else "Colony established", parts.get("bonus", 0.0), 1],
 		["%s difficulty" % str(result.get("difficulty_name", "")), parts.get("multiplier", 1.0), 0],
 	]
 	for row in rows:
@@ -528,10 +615,12 @@ func submit_score(player_name: String) -> int:
 	return rank
 
 func play_again() -> void:
+	Settlement.reset()
 	Engine.set_meta("colony_start", int(result.get("difficulty", maxi(difficulty, 0))))
 	restart.call()
 
 func change_difficulty() -> void:
+	Settlement.reset()
 	if Engine.has_meta("colony_start"):
 		Engine.remove_meta("colony_start")
 	restart.call()
@@ -635,7 +724,7 @@ func close_board() -> void:
 
 # Cannot wait: the crew has no food and the colony is counting down.
 func urgent_notes() -> Array:
-	var c: Dictionary = scene.bay.get_colony()
+	var c: Dictionary = _cb().get_colony()
 	if c["running"] and c["starving"]:
 		var left := maxi(1, int(ceilf(float(c["grace_days"]) - float(c["hunger_days"]))))
 		return [{"key": "colony_hunger", "text": "The crew is out of food. In %d days the colony fails. Harvest whatever is ready, and sow quick crops like lettuce." % left}]
@@ -643,7 +732,62 @@ func urgent_notes() -> Array:
 
 # Worth saying when nothing is more pressing: the food in store is running low.
 func voice_notes() -> Array:
-	var c: Dictionary = scene.bay.get_colony()
+	var c: Dictionary = _cb().get_colony()
 	if c["running"] and not c["starving"] and float(c["reserve_days"]) < WARN_DAYS:
 		return [{"key": "colony_low", "text": "The food in store is down to %d days. Harvest what is ready, and keep every bed sown." % int(ceilf(float(c["reserve_days"])))}]
 	return []
+
+# ---------------------------------------------------------------------------------------------------------
+# people, establishing the colony, the air
+# ---------------------------------------------------------------------------------------------------------
+
+func _on_arrival(population: int) -> void:
+	var more := population - _pop_seen
+	_pop_seen = population
+	if more > 0:
+		_say("A ship from Earth has brought %d more colonists. We are now %d." % [more, population], "colony_arrival")
+	else:
+		_say("More colonists have arrived. We are now %d." % population, "colony_arrival")
+
+# Only a game that goes on after the goal (the Mars dome) is told the colony is established: the run is not over.
+func _on_established() -> void:
+	result = _cb().get_colony().duplicate(true)
+	scene.set_speed(0.0)
+	phase = "ending"
+	if _ending == null:
+		var made := _overlay("ColonyEnding", 760.0)
+		_ending = made[0]
+		_ending_box = made[1]
+	_clear(_ending_box)
+	_ending_box.add_child(_label("COLONY ESTABLISHED", 22, Color("8fd68a")))
+	_ending_box.add_child(_label(_fill("The farm kept all {crew} colonists fed for {goal} days. The {place} is here to stay, and an established colony cannot be starved out any more. But Mars is still a dead world. Keep building {unit}s: the oxygen of their plants can thicken its air until it is breathable, and then no {unit} is needed at all."), 15, _text_col, true))
+	_ending_box.add_child(_label("Score so far  %s  ·  Pop %d  ·  %d %ss" % [_n(float(result.get("score", 0))), int(result.get("population", 0)), int(result.get("units", 1)), _unit_noun()], 14, _muted))
+	var buttons := HBoxContainer.new()
+	buttons.add_theme_constant_override("separation", 8)
+	_ending_box.add_child(buttons)
+	buttons.add_child(_button("Keep going: terraform Mars", keep_going))
+	buttons.add_child(_button("Finish the run here", finish_here))
+	_ending.visible = true
+	_say(_fill("The colony is established. The farm kept all {crew} of us fed for {goal} days. Mars is still waiting."), "colony_established")
+
+func keep_going() -> void:
+	if _ending != null:
+		_ending.visible = false
+	phase = "playing"
+	scene.set_speed(START_SPEED)
+
+# End an established run as a success (the ending with the score follows).
+func finish_here() -> void:
+	if _ending != null:
+		_ending.visible = false
+	_cb().colony_finish_established()
+
+func _on_terraform_stage(stage: int) -> void:
+	var lines := {
+		1: "Oxygen is building up in the thin air. Mars is beginning to change.",
+		2: "The air is now thick enough for open-air farming. Two more sites have opened beyond the airlocks, for gardens.",
+		3: "The air is breathable with a mask. We are almost there.",
+		4: "The air is breathable. Mars is terraformed.",
+	}
+	if lines.has(stage) and not (stage == 4 and bool(_cb().get_colony()["running"])):       # (a finished colony says it itself)
+		_say(lines[stage], "terraform_%d" % stage)

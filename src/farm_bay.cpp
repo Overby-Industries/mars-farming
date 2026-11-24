@@ -36,6 +36,7 @@ const char *outcome_name(Outcome o) {
         case Outcome::Evacuated: return "evacuated";
         case Outcome::EvacuatedWithLosses: return "evacuated_with_losses";
         case Outcome::Extinct: return "extinct";
+        case Outcome::Terraformed: return "terraformed";
     }
     return "running";
 }
@@ -71,6 +72,14 @@ void FarmBay::_bind_methods() {
     ClassDB::bind_method(D_METHOD("start_colony", "difficulty", "demand_scale", "reserve_scale"), &FarmBay::start_colony, DEFVAL(1.0), DEFVAL(1.0));
     ClassDB::bind_method(D_METHOD("stop_colony"), &FarmBay::stop_colony);
     ClassDB::bind_method(D_METHOD("get_colony"), &FarmBay::get_colony);
+    ClassDB::bind_method(D_METHOD("get_terraform"), &FarmBay::get_terraform);
+    ClassDB::bind_method(D_METHOD("setup_settlement", "max_units", "terraforming", "open_air_bonus"), &FarmBay::setup_settlement);
+    ClassDB::bind_method(D_METHOD("link_colony", "primary"), &FarmBay::link_colony);
+    ClassDB::bind_method(D_METHOD("unlink_colony"), &FarmBay::unlink_colony);
+    ClassDB::bind_method(D_METHOD("colony_add_unit"), &FarmBay::colony_add_unit);
+    ClassDB::bind_method(D_METHOD("set_colony_growth", "on"), &FarmBay::set_colony_growth);
+    ClassDB::bind_method(D_METHOD("colony_finish_established"), &FarmBay::colony_finish_established);
+    ClassDB::bind_static_method("FarmBay", D_METHOD("get_expansion_rules"), &FarmBay::get_expansion_rules);
     ClassDB::bind_static_method("FarmBay", D_METHOD("get_difficulty_rules", "difficulty"), &FarmBay::get_difficulty_rules);
     ClassDB::bind_method(D_METHOD("advance_hours", "hours"), &FarmBay::advance_hours);
     ClassDB::bind_method(D_METHOD("set_time_scale", "hours_per_second"), &FarmBay::set_time_scale);
@@ -87,6 +96,9 @@ void FarmBay::_bind_methods() {
     ADD_SIGNAL(MethodInfo("plant_died", PropertyInfo(Variant::INT, "bed"), PropertyInfo(Variant::INT, "slot")));
     ADD_SIGNAL(MethodInfo("day_changed", PropertyInfo(Variant::INT, "day")));
     ADD_SIGNAL(MethodInfo("colony_outcome", PropertyInfo(Variant::INT, "outcome")));
+    ADD_SIGNAL(MethodInfo("colony_arrival", PropertyInfo(Variant::INT, "population")));
+    ADD_SIGNAL(MethodInfo("colony_established"));
+    ADD_SIGNAL(MethodInfo("terraform_stage", PropertyInfo(Variant::INT, "stage")));
 
     ClassDB::bind_integer_constant(get_class_static(), "", "STAGE_EMPTY", static_cast<int>(Stage::Empty));
     ClassDB::bind_integer_constant(get_class_static(), "", "STAGE_SEED", static_cast<int>(Stage::Seed));
@@ -106,13 +118,22 @@ void FarmBay::_bind_methods() {
     ClassDB::bind_integer_constant(get_class_static(), "", "OUTCOME_EVACUATED", static_cast<int>(Outcome::Evacuated));
     ClassDB::bind_integer_constant(get_class_static(), "", "OUTCOME_EVACUATED_WITH_LOSSES", static_cast<int>(Outcome::EvacuatedWithLosses));
     ClassDB::bind_integer_constant(get_class_static(), "", "OUTCOME_EXTINCT", static_cast<int>(Outcome::Extinct));
+    ClassDB::bind_integer_constant(get_class_static(), "", "OUTCOME_TERRAFORMED", static_cast<int>(Outcome::Terraformed));
 }
 
 FarmBay::FarmBay() : bay_(1) {}
 FarmBay::~FarmBay() {}
 
+void FarmBay::check_link() {
+    if (linked_id_ != 0 && !UtilityFunctions::is_instance_id_valid(linked_id_)) {      // the bay it fed was freed: feed nothing
+        bay_.unlink_colony();
+        linked_id_ = 0;
+    }
+}
+
 void FarmBay::_process(double delta) {
     if (Engine::get_singleton()->is_editor_hint() || paused_ || time_scale_ <= 0.0) return;
+    check_link();
     // at most six game hours a frame, so a long frame at a high speed cannot stall the game
     bay_.advance(std::min(delta * time_scale_, 6.0));
     emit_events();
@@ -125,6 +146,9 @@ void FarmBay::emit_events() {
             case EventType::PlantDied: emit_signal("plant_died", e.bed, e.slot); break;
             case EventType::DayChanged: emit_signal("day_changed", e.value); break;
             case EventType::ColonyOutcome: emit_signal("colony_outcome", e.value); break;
+            case EventType::ColonyArrival: emit_signal("colony_arrival", e.value); break;
+            case EventType::ColonyEstablished: emit_signal("colony_established"); break;
+            case EventType::TerraformStage: emit_signal("terraform_stage", e.value); break;
         }
     }
 }
@@ -279,6 +303,7 @@ void FarmBay::set_setting(const String &key, const Variant &value) {
     else if (key == "dust_tau") s.dust_tau = v;
     else if (key == "shade") s.shade = std::clamp(v, 0.0, 1.0);
     else if (key == "reclaim_fraction") s.reclaim_fraction = std::clamp(v, 0.0, 1.0);
+    else if (key == "tank_resupply_l_day") s.tank_resupply_l_day = std::max(0.0, v);
     else if (key == "auto_irrigate") s.auto_irrigate = v != 0.0;
     else if (key == "tank_l") bay_.tank_l = std::clamp(v, 0.0, bay_.tank_capacity_l);
     else if (key == "tank_capacity_l") bay_.tank_capacity_l = std::max(0.0, v);
@@ -300,6 +325,7 @@ Variant FarmBay::get_setting(const String &key) const {
     if (key == "dust_tau") return s.dust_tau;
     if (key == "shade") return s.shade;
     if (key == "reclaim_fraction") return s.reclaim_fraction;
+    if (key == "tank_resupply_l_day") return s.tank_resupply_l_day;
     if (key == "auto_irrigate") return s.auto_irrigate;
     if (key == "tank_l") return bay_.tank_l;
     if (key == "tank_capacity_l") return bay_.tank_capacity_l;
@@ -312,6 +338,61 @@ void FarmBay::start_colony(int difficulty, double demand_scale, double reserve_s
 }
 
 void FarmBay::stop_colony() { bay_.stop_colony(); }
+
+void FarmBay::setup_settlement(int max_units, bool terraforming, int open_air_bonus) { bay_.setup_settlement(std::clamp(max_units, 1, 16), terraforming, std::max(0, open_air_bonus)); }
+
+void FarmBay::link_colony(FarmBay *primary) {
+    if (primary == nullptr || primary == this) {
+        unlink_colony();
+        return;
+    }
+    bay_.link_colony(primary->bay_);
+    linked_id_ = static_cast<int64_t>(primary->get_instance_id());
+}
+
+void FarmBay::unlink_colony() {
+    bay_.unlink_colony();
+    linked_id_ = 0;
+}
+
+bool FarmBay::colony_add_unit() { return bay_.active_colony().add_unit(); }
+void FarmBay::set_colony_growth(bool on) { bay_.active_colony().set_growth(on); }
+
+void FarmBay::colony_finish_established() {
+    const Outcome o = bay_.active_colony().finish_established();
+    if (o != Outcome::Running) emit_signal("colony_outcome", static_cast<int>(o));
+}
+
+Dictionary FarmBay::get_terraform() const {
+    const aevoria::farm::Terraform &t = bay_.colony_linked() ? const_cast<aevoria::farm::Bay &>(bay_).active_terraform() : bay_.terraform;
+    Dictionary d;
+    d["enabled"] = t.enabled();
+    d["progress"] = t.progress();
+    d["stage"] = t.stage();
+    d["complete"] = t.complete();
+    d["leaf_area"] = t.leaf_area_m2();
+    d["equilibrium"] = t.equilibrium();
+    d["best_stage"] = t.best_stage();
+    Array stages;
+    for (double v : aevoria::farm::kTerraformStages) stages.push_back(v);
+    d["stages"] = stages;
+    return d;
+}
+
+Dictionary FarmBay::get_expansion_rules() {
+    Dictionary d;
+    d["plenty_reserve_days"] = aevoria::farm::kPlentyReserveDays;
+    d["growth_interval_days"] = aevoria::farm::kGrowthIntervalDays;
+    d["housing_factor"] = aevoria::farm::kHousingFactor;
+    d["max_units"] = aevoria::farm::kMaxUnits;
+    d["expand_min_reserve_days"] = aevoria::farm::kExpandMinReserveDays;
+    d["expand_min_harvest_days"] = aevoria::farm::kExpandMinHarvestDays;
+    d["expansion_cost_days"] = aevoria::farm::kExpansionCostDays;
+    d["surplus_factor"] = aevoria::farm::kSurplusFactor;
+    d["surplus_window_days"] = aevoria::farm::kSurplusWindowDays;
+    d["plenty_min_age_days"] = aevoria::farm::kPlentyMinAgeDays;
+    return d;
+}
 
 Dictionary FarmBay::get_difficulty_rules(int difficulty) {
     const aevoria::farm::ColonyRules &r = aevoria::farm::colony_rules(difficulty_from(difficulty));
@@ -340,6 +421,18 @@ Dictionary FarmBay::get_colony() const {
     d["difficulty"] = static_cast<int>(c.difficulty());
     d["difficulty_name"] = String(r.name);
     d["crew"] = r.crew;
+    d["population"] = c.population();
+    d["housing"] = c.housing();
+    d["units"] = c.units();
+    d["max_units"] = c.max_units();
+    d["plenty"] = c.plenty();
+    d["surplus_ratio"] = c.surplus_ratio();
+    d["crowded"] = c.crowded();
+    d["expansion_ready"] = c.expansion_ready();
+    d["growth_progress"] = c.growth_progress();
+    d["growth_enabled"] = c.growth_enabled();
+    d["arrivals_total"] = c.arrivals_total();
+    d["established"] = c.established();
     d["survivors"] = c.survivors();
     d["day"] = c.day();
     d["goal_days"] = r.goal_days;
@@ -362,6 +455,8 @@ Dictionary FarmBay::get_colony() const {
     parts["reserve"] = b.reserve;
     parts["lost"] = b.lost;
     parts["hunger"] = b.hunger;
+    parts["growth"] = b.growth;
+    parts["expansion"] = b.expansion;
     parts["bonus"] = b.bonus;
     parts["multiplier"] = b.multiplier;
     parts["total"] = static_cast<int64_t>(b.total);
@@ -371,6 +466,7 @@ Dictionary FarmBay::get_colony() const {
 }
 
 void FarmBay::advance_hours(double hours) {
+    check_link();
     bay_.advance(hours);
     emit_events();
 }
